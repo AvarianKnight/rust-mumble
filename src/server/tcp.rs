@@ -11,6 +11,7 @@ use crate::server::constants::{MAX_BANDWIDTH_IN_BYTES, MAX_CLIENTS};
 use crate::state::ServerStateRef;
 use anyhow::Context;
 use futures::TryFutureExt;
+use regex::Regex;
 use tokio::io::{self};
 use tokio::io::{AsyncWriteExt, ReadHalf};
 use tokio::net::{TcpListener, TcpStream};
@@ -102,11 +103,25 @@ async fn handle_new_client(
     state: ServerStateRef,
 ) -> Result<(), anyhow::Error> {
     let (version, authenticate, crypt_state) = Client::init(&mut tls_stream, server_version).await.context("init client")?;
+    let version_release = version.get_release();
 
     let (read, write) = io::split(tls_stream);
     let (tx, rx) = mpsc::channel(MAX_BANDWIDTH_IN_BYTES);
 
     let username = authenticate.get_username().to_string();
+    
+    let usernameRegex = Regex::new(r"^\[\d+\].*$").unwrap();
+    if !usernameRegex.is_match(&username) || version_release != "CitizenFX Client" {
+        tracing::warn!(
+            "Unofficial client {} connected with {} from {}",
+            username,
+            version_release,
+            peer_ip
+        );
+
+        return Err(anyhow::anyhow!("Disconnecting unofficial client username: {}", username));
+    }
+    
     let client = state.add_client(version, authenticate, crypt_state, write, tx, peer_ip);
 
     tracing::info!("TCP new client {} connected {}", username, peer_ip);
