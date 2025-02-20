@@ -1,4 +1,5 @@
 use std::net::IpAddr;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use crate::client::{Client, ClientArc};
@@ -104,14 +105,10 @@ async fn handle_new_client(
 ) -> Result<(), anyhow::Error> {
     let (version, authenticate, crypt_state) = Client::init(&mut tls_stream, server_version).await.context("init client")?;
     let version_release = version.get_release();
-
-    let (read, write) = io::split(tls_stream);
-    let (tx, rx) = mpsc::channel(MAX_BANDWIDTH_IN_BYTES);
-
     let username = authenticate.get_username().to_string();
     
     static USERNAME_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[\d+\].*$").unwrap())
-    if version_release != "CitizenFX Client" ||  !USERNAME_REGEX.is_match(&username) {
+    if !version_release.to_lowercase().contains("citizenfx") ||  !USERNAME_REGEX.is_match(&username) {
         tracing::warn!(
             "Unofficial client {} connected with {} from {}",
             username,
@@ -121,6 +118,9 @@ async fn handle_new_client(
 
         return Err(anyhow::anyhow!("Disconnecting unofficial client username: {}", username));
     }
+
+    let (read, write) = io::split(tls_stream);
+    let (tx, rx) = mpsc::channel(MAX_BANDWIDTH_IN_BYTES);
     
     let client = state.add_client(version, authenticate, crypt_state, write, tx, peer_ip);
 
