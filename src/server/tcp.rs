@@ -110,7 +110,7 @@ async fn handle_new_client(
     static USERNAME_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[\d+\].*$").unwrap());
     if !version_release.to_lowercase().contains("citizenfx") ||  !USERNAME_REGEX.is_match(&username) {
         tracing::warn!(
-            "Unofficial client {} connected with {} from {}",
+            "User '{}' connected with unofficial client '{}' from {}",
             username,
             version_release,
             peer_ip
