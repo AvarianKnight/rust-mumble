@@ -110,8 +110,8 @@ async fn handle_new_client(
 
     let username = authenticate.get_username().to_string();
     
-    let usernameRegex = Regex::new(r"^\[\d+\].*$").unwrap();
-    if !usernameRegex.is_match(&username) || version_release != "CitizenFX Client" {
+    let username_regex = Regex::new(r"^\[\d+\].*$").unwrap();
+    if !username_regex.is_match(&username) || version_release != "CitizenFX Client" {
         tracing::warn!(
             "Unofficial client {} connected with {} from {}",
             username,
