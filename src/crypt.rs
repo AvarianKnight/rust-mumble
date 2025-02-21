@@ -1,9 +1,9 @@
 use crate::error::DecryptError;
 use crate::proto::mumble::CryptSetup;
-use crate::voice::{decode_voice_packet, encode_voice_packet, VoicePacket, VoicePacketDst};
+use crate::voice::{VoicePacket, VoicePacketDst, decode_voice_packet, encode_voice_packet};
+use aes::Aes128;
 use aes::cipher::generic_array::GenericArray;
 use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
-use aes::Aes128;
 use bytes::BytesMut;
 use ring::rand::{SecureRandom, SystemRandom};
 use std::time::Instant;
@@ -102,7 +102,7 @@ impl CryptState {
         dst.unsplit(inner);
 
         dst[0] = self.encrypt_nonce as u8;
-        dst[1..4].copy_from_slice(&tag.to_be_bytes()[0..3]);
+        dst[1..3].copy_from_slice(&tag.to_be_bytes()[0..2]);
     }
 
     /// Decrypts a voice packet and (if successful) returns the `Result` of parsing the packet.
@@ -146,7 +146,7 @@ impl CryptState {
 
         let tag = self.ocb_decrypt(buf.as_mut());
 
-        if Ok(()) != ring::constant_time::verify_slices_are_equal(&header[1..4], &tag.to_be_bytes()[0..3]) {
+        if Ok(()) != ring::constant_time::verify_slices_are_equal(&header[1..3], &tag.to_be_bytes()[0..2]) {
             self.decrypt_nonce = saved_nonce;
             return Err(DecryptError::Mac);
         }
