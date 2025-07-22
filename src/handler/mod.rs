@@ -4,10 +4,10 @@ mod crypt_setup;
 mod permission_query;
 mod ping;
 mod user_state;
+mod user_stats;
 mod version;
 mod voice_packet;
 mod voice_target;
-mod user_stats;
 
 // use anyhow::anyhow;
 
@@ -144,8 +144,6 @@ impl MessageHandler {
                 tokio::select! {
                     _ = token.cancelled() => {
                         tracing::info!("TCP Client {} dropped", client);
-                        // TODO: Remove if testing shows thi still leaks
-                        drop(stream);
                         return Ok(())
                     }
                     kind = stream.read_u16() => {

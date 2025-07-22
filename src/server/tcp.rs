@@ -20,6 +20,8 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
 use tokio_rustls::{TlsAcceptor, server::TlsStream};
 
+use socket2::{SockRef, TcpKeepalive};
+
 pub async fn create_tcp_server(
     tcp_listener: TcpListener,
     acceptor: TlsAcceptor,
@@ -64,7 +66,23 @@ pub async fn create_tcp_server(
         let handle_accept_tls_stream = async move {
             let peer_ip = addr.ip();
 
+            // disable nagle algo
             tcp_stream.set_nodelay(true).context("set stream no delay").unwrap();
+
+            // immediately cleanup connections, should be default for SO_LINGER
+            tcp_stream
+                .set_linger(Some(Duration::from_secs(0)))
+                .context("set linger to 0")
+                .unwrap();
+
+            let socket = SockRef::from(&tcp_stream);
+
+            let keep_alive = TcpKeepalive::new()
+                .with_retries(2)
+                .with_time(Duration::from_secs(2))
+                .with_interval(Duration::from_secs(1));
+
+            socket.set_tcp_keepalive(&keep_alive).context("set tcp keep alive").unwrap();
 
             let stream = tls_acceptor
                 .accept(tcp_stream)
