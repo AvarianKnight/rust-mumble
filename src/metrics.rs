@@ -29,4 +29,14 @@ lazy_static! {
         &["protocol", "direction", "kind"]
     )
     .expect("can't create a metric");
+    pub static ref CRYPT_RESETS: IntGauge = register_int_gauge!(opts!(
+        "zumble_crypt_resets",
+        "the amount of clients that got a crypt reset (not unique)"
+    ))
+    .expect("can't create metric");
+    pub static ref DISCONNECT: IntCounterVec = register_int_counter_vec!(
+        opts!("zumble_disconnect", "unknown message bytes (sent from clients not initialized)"),
+        &["disconnect_reason"]
+    )
+    .expect("can't create a metric");
 }

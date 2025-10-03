@@ -1,6 +1,5 @@
 use scc::HashMap;
 use scc::ebr::Guard;
-use tokio::sync::mpsc::error::TrySendError;
 
 use crate::client::{ClientArc, WeakClient};
 use crate::error::DisconnectReason;
@@ -98,18 +97,9 @@ impl Handler for VoicePacket<ClientBound> {
                             return;
                         }
 
-                        match cl.publisher.try_send(ClientMessage::SendVoicePacket(self.clone())) {
-                            Ok(_) => {}
-                            Err(TrySendError::Closed(_) | TrySendError::Full(_)) => {
-                                let session_id = cl.session_id;
-                                let state = Arc::clone(state);
-                                // If we don't have a channel then we should drop the client as the receiving part of the channel got canceled
-                                // TODO: have a queue wrapper for state
-                                tokio::spawn(async move {
-                                    state.disconnect(session_id, DisconnectReason::LostReceivingChannel).await;
-                                });
-                            }
-                        }
+                        let _ = cl.publisher.try_send(ClientMessage::SendVoicePacket(self.clone())).map_err(|_e| {
+                            state.add_client_to_disconnect_queue(cl.session_id, DisconnectReason::ClientMSPCFull);
+                        });
                     }
                 })
                 .await;

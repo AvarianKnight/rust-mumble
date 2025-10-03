@@ -3,8 +3,9 @@ use crate::client::{Client, ClientArc, WeakClient};
 use crate::crypt::CryptState;
 use crate::error::{DisconnectReason, MumbleError};
 use crate::message::ClientMessage;
+use crate::metrics::DISCONNECT;
 use crate::proto::mumble::{Authenticate, ChannelRemove, ChannelState, CodecVersion, UserRemove, Version};
-use crate::proto::{message_to_bytes, MessageKind};
+use crate::proto::{MessageKind, message_to_bytes};
 use crate::server::constants::{ConcurrentHashMap, MAX_CLIENTS};
 use crate::voice::{ServerBound, VoicePacket};
 use bytes::BytesMut;
@@ -12,8 +13,8 @@ use protobuf::Message;
 // use scc::HashCache;
 use scc::ebr::Guard;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::io::WriteHalf;
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc::Sender;
@@ -65,6 +66,7 @@ pub struct ServerState {
     pub clients_by_socket: ConcurrentHashMap<SocketAddr, WeakClient>,
     // pub clients_by_peer: ConcurrentHashMap<IpAddr, AtomicU32>,
     pub channels: ConcurrentHashMap<u32, ChannelRef>,
+    pub disconnect_queue: ConcurrentHashMap<u32, DisconnectReason>,
     pub codec_state: Arc<CodecState>,
     pub socket: Arc<UdpSocket>,
     pub restrict_to_version: Arc<Option<String>>,
@@ -86,6 +88,7 @@ impl ServerState {
             // logs: HashCache::with_capacity(500, 1000),
             clients_without_udp: ConcurrentHashMap::with_capacity(MAX_CLIENTS),
             clients_by_socket: ConcurrentHashMap::with_capacity(MAX_CLIENTS),
+            disconnect_queue: ConcurrentHashMap::with_capacity(MAX_CLIENTS),
             // clients_by_peer: ConcurrentHashMap::with_capacity(MAX_CLIENTS),
             channels,
             codec_state: Arc::new(CodecState::default()),
@@ -170,6 +173,11 @@ impl ServerState {
         let _ = self.clients_by_socket.insert_async(addr, Arc::downgrade(client)).await;
     }
 
+    pub fn add_client_to_disconnect_queue(&self, session_id: u32, disconnect_reason: DisconnectReason) {
+        // if we fail to add the session to the queue we don't care.
+        let _ = self.disconnect_queue.insert(session_id, disconnect_reason);
+    }
+
     pub fn broadcast_message<T: Message>(&self, kind: MessageKind, message: &T) -> Result<(), MumbleError> {
         tracing::trace!("broadcast message: {:?}, {:?}", std::any::type_name::<T>(), message);
 
@@ -180,15 +188,15 @@ impl ServerState {
         let guard = Guard::new();
 
         for (_k, client) in self.clients.iter(&guard) {
-            match client.publisher.try_send(ClientMessage::SendMessage {
-                kind,
-                payload: Arc::clone(&bytes),
-            }) {
-                Ok(_) => {}
-                Err(err) => {
-                    tracing::error!("failed to send message to {}: {}", client, err);
-                }
-            };
+            let _ = client
+                .publisher
+                .try_send(ClientMessage::SendMessage {
+                    kind,
+                    payload: Arc::clone(&bytes),
+                })
+                .map_err(|_e| {
+                    self.add_client_to_disconnect_queue(client.session_id, DisconnectReason::ClientMSPCFull);
+                });
         }
 
         Ok(())
@@ -361,6 +369,7 @@ impl ServerState {
 
             if let Some(client) = client {
                 crate::metrics::CLIENTS_TOTAL.dec();
+                DISCONNECT.with_label_values(&[&disconnect_reason.to_string()]).inc();
                 tracing::info!("Removing client {} with reason {:?}", client, disconnect_reason);
 
                 // tell the client loop to shut down their UDP/TCP threads, this will drop the

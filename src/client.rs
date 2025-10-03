@@ -38,7 +38,7 @@ pub struct NetStats {
     pub udp_ping_avg: AtomicF32,
     pub udp_ping_var: AtomicF32,
     pub tcp_ping_avg: AtomicF32,
-    pub tcp_ping_var: AtomicF32
+    pub tcp_ping_var: AtomicF32,
 }
 
 pub struct Client {
@@ -58,6 +58,7 @@ pub struct Client {
     // Token used to cancel any tasks related to this client, i.e. tcp/udp loops
     pub cancel_token: CancellationToken,
     pub udp_socket: Arc<UdpSocket>,
+    // TODO: We should properly split UDP/TCP to seperate publishers.
     pub publisher: Sender<ClientMessage>,
     pub targets: VoiceTargetArray,
     pub last_tcp_ping: AtomicCell<Instant>,
@@ -331,7 +332,8 @@ impl Client {
 
             let buf = &dest.freeze()[..];
 
-            match timeout(Duration::from_millis(250), self.udp_socket.send_to(buf, addr.as_ref())).await {
+            // we're doing real time audio, if we can't send this in 10 millis then the information no longer matters.
+            match timeout(Duration::from_millis(10), self.udp_socket.send_to(buf, addr.as_ref())).await {
                 Ok(Ok(_)) => Ok(()),
                 Ok(Err(e)) => Err(MumbleError::Io(e)),
                 Err(_) => Err(MumbleError::PacketDiscarded),

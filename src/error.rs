@@ -54,4 +54,6 @@ pub enum DisconnectReason {
     ClientTimedOutTcp,
     #[error("Clients receiving channel got removed")]
     LostReceivingChannel,
+    #[error("Client Message Channel Full")]
+    ClientMSPCFull,
 }

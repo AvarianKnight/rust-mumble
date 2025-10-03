@@ -8,7 +8,7 @@ use crate::handler::MessageHandler;
 use crate::message::ClientMessage;
 use crate::proto::MessageKind;
 use crate::proto::mumble::Version;
-use crate::server::constants::{MAX_BANDWIDTH_IN_BYTES, MAX_CLIENTS};
+use crate::server::constants::MAX_CLIENTS;
 use crate::state::ServerStateRef;
 use anyhow::Context;
 use futures::TryFutureExt;
@@ -52,7 +52,7 @@ pub async fn create_tcp_server(
         if cur_clients >= MAX_CLIENTS {
             tokio::spawn(async move {
                 // we don't care if this errors, drop the result
-                let _ = tcp_stream.shutdown();
+                let _ = tcp_stream.shutdown().await;
             });
             tracing::info!(
                 "{:?} tried to join but the server is at maximum capacity ({}/{})",
@@ -145,7 +145,9 @@ async fn handle_new_client(
     }
 
     let (read, write) = io::split(tls_stream);
-    let (tx, rx) = mpsc::channel(MAX_BANDWIDTH_IN_BYTES);
+
+    // we shouldn't really hit a case where this gets hit.
+    let (tx, rx) = mpsc::channel(4096);
 
     let client = state.add_client(version, authenticate, crypt_state, write, tx, peer_ip);
 
