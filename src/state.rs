@@ -14,7 +14,7 @@ use protobuf::Message;
 use scc::ebr::Guard;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use tokio::io::WriteHalf;
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc::Sender;
@@ -70,6 +70,8 @@ pub struct ServerState {
     pub codec_state: Arc<CodecState>,
     pub socket: Arc<UdpSocket>,
     pub restrict_to_version: Arc<Option<String>>,
+    // used only for logging
+    pub debug_message_id: AtomicU64,
     // pub logs: HashCache<SocketAddr, ()>,
     session_count: AtomicU32,
     channel_count: AtomicU32,
@@ -93,6 +95,7 @@ impl ServerState {
             channels,
             codec_state: Arc::new(CodecState::default()),
             socket,
+            debug_message_id: AtomicU64::new(0),
             session_count: AtomicU32::new(1),
             channel_count: AtomicU32::new(1),
         }
@@ -179,11 +182,16 @@ impl ServerState {
     }
 
     pub fn broadcast_message<T: Message>(&self, kind: MessageKind, message: &T) -> Result<(), MumbleError> {
-        tracing::trace!("broadcast message: {:?}, {:?}", std::any::type_name::<T>(), message);
+        let message_id = self.debug_message_id.fetch_add(1, Ordering::Relaxed);
+        tracing::trace!(
+            "[message_id: {message_id}] broadcast message: {:?}, {:?}",
+            std::any::type_name::<T>(),
+            message
+        );
+
+        tracing::info!("[message_id: {message_id}] staring message broadcast, kind: {kind}");
 
         let bytes = message_to_bytes(kind, message)?;
-
-        let bytes = Arc::new(bytes);
 
         let guard = Guard::new();
 
@@ -192,12 +200,14 @@ impl ServerState {
                 .publisher
                 .try_send(ClientMessage::SendMessage {
                     kind,
-                    payload: Arc::clone(&bytes),
+                    payload: bytes.clone(),
                 })
                 .map_err(|_e| {
                     self.add_client_to_disconnect_queue(client.session_id, DisconnectReason::ClientMSPCFull);
                 });
         }
+
+        tracing::info!("[message_id: {message_id}] ending message broadcast, kind: {kind}");
 
         Ok(())
     }
@@ -215,6 +225,8 @@ impl ServerState {
                 };
             }
         }
+
+        tracing::info!("Deleting channel {leave_channel_id} because session: {client_session} was the only client in it.");
 
         // Broadcast channel remove
         let mut channel_remove = ChannelRemove::new();
@@ -391,19 +403,9 @@ impl ServerState {
                 });
 
                 let socket = client.udp_socket_addr.swap(None);
-                // let mut should_remove = false;
 
                 if let Some(socket_addr) = socket {
                     self.remove_client_by_socket(&socket_addr);
-                    // if let Some(ref_count) = self.clients_by_peer.get(&socket_addr.ip()) {
-                    //     let count = ref_count.fetch_sub(1, Ordering::SeqCst);
-                    //     // if our last count was 0 that means our new count will be 0, we should remove them from the map
-                    //     should_remove = count == 1;
-                    // }
-                    //
-                    // if should_remove {
-                    //     self.clients_by_peer.remove(&socket_addr.ip());
-                    // }
                 }
 
                 channel = Some(client.channel_id.load(Ordering::Relaxed));
@@ -412,15 +414,15 @@ impl ServerState {
 
         // TODO: Figure out if this is needed whenever we are already deleting the client
         if let Some(channel_id) = channel {
-            self.broadcast_client_delete(client_session, channel_id).await;
+            self.broadcast_client_delete(client_session, channel_id);
         }
         self.cleanup_client_by_session(client_session);
     }
 
-    async fn broadcast_client_delete(&self, client_id: u32, channel_id: u32) {
+    fn broadcast_client_delete(&self, client_id: u32, channel_id: u32) {
         let mut remove = UserRemove::new();
         remove.set_session(client_id);
-        remove.set_reason("disconnected".to_string());
+        remove.set_reason("Disconnected".to_string());
 
         let _ = self.broadcast_message(MessageKind::UserRemove, &remove);
 
