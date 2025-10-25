@@ -22,6 +22,13 @@ use tokio_rustls::{TlsAcceptor, server::TlsStream};
 
 use socket2::{SockRef, TcpKeepalive};
 
+fn shutdown_tcp_stream(mut tcp_stream: TcpStream) {
+    tokio::spawn(async move {
+        // we don't care if this errors, drop the result
+        let _ = tcp_stream.shutdown().await;
+    });
+}
+
 pub async fn create_tcp_server(
     tcp_listener: TcpListener,
     acceptor: TlsAcceptor,
@@ -31,7 +38,7 @@ pub async fn create_tcp_server(
     let tls_acceptor = acceptor.clone();
 
     loop {
-        let (mut tcp_stream, _remote_addr) = match tcp_listener.accept().await {
+        let (tcp_stream, _remote_addr) = match tcp_listener.accept().await {
             Ok(v) => v,
             Err(e) => {
                 tracing::error!("Failed to accept TCP stream: {}", e);
@@ -50,16 +57,14 @@ pub async fn create_tcp_server(
             Ok(a) => a,
             Err(e) => {
                 tracing::error!("Failed to get TCP stream address: {}", e);
+                shutdown_tcp_stream(tcp_stream);
                 continue;
             }
         };
 
         // if we're over our max client count then we should shut down the tcp stream
         if cur_clients >= MAX_CLIENTS {
-            tokio::spawn(async move {
-                // we don't care if this errors, drop the result
-                let _ = tcp_stream.shutdown().await;
-            });
+            shutdown_tcp_stream(tcp_stream);
             tracing::info!(
                 "{:?} tried to join but the server is at maximum capacity ({}/{})",
                 addr,
