@@ -34,7 +34,7 @@ pub async fn create_tcp_server(
         let (mut tcp_stream, _remote_addr) = match tcp_listener.accept().await {
             Ok(v) => v,
             Err(e) => {
-                tracing::error!("{}", e);
+                tracing::error!("Failed to accept TCP stream: {}", e);
                 continue;
             }
         };
@@ -46,7 +46,13 @@ pub async fn create_tcp_server(
         let restrict_to_version = state.restrict_to_version.clone();
 
         let cur_clients = state.clients.len();
-        let addr = tcp_stream.peer_addr()?;
+        let addr = match tcp_stream.peer_addr() {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::error!("Failed to get TCP stream address: {}", e);
+                continue;
+            }
+        };
 
         // if we're over our max client count then we should shut down the tcp stream
         if cur_clients >= MAX_CLIENTS {

@@ -31,7 +31,7 @@ pub type WeakClient = Weak<Client>;
 
 type VoiceTargetArray = [Arc<VoiceTarget>; 29];
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct NetStats {
     pub udp_packets: AtomicU32,
     pub tcp_packets: AtomicU32,
@@ -41,6 +41,7 @@ pub struct NetStats {
     pub tcp_ping_var: AtomicF32,
 }
 
+#[derive(Debug)]
 pub struct Client {
     // pub version: Version,
     name: Arc<String>,
@@ -154,6 +155,7 @@ impl Client {
         &self.name
     }
 
+    #[tracing::instrument(level = "info")]
     pub async fn send(&self, data: &[u8]) -> Result<(), MumbleError> {
         // if our cancel token gets called mid write we should abort out of our write with an error
         tokio::select! {
