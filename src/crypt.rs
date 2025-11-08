@@ -158,6 +158,8 @@ impl CryptState {
 
         let tag = self.ocb_decrypt(buf.as_mut());
 
+        // we're not likely to upgrade our ring and i don't feel like trying to figure this out
+        #[allow(deprecated)]
         if Ok(()) != ring::constant_time::verify_slices_are_equal(&header[1..4], &tag.to_be_bytes()[0..3]) {
             self.decrypt_nonce = saved_nonce;
             return Err(DecryptError::Mac);

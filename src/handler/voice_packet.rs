@@ -1,6 +1,3 @@
-use scc::HashMap;
-use tracing::Instrument;
-
 use crate::client::{ClientArc, WeakClient};
 use crate::error::DisconnectReason;
 use crate::message::ClientMessage;

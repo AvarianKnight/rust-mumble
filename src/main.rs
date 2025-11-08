@@ -1,3 +1,6 @@
+#![allow(unused_parens)]
+#![allow(mismatched_lifetime_syntaxes)]
+
 use rustls::ServerConfig;
 
 #[cfg(not(target_os = "windows"))]
