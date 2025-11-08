@@ -192,8 +192,6 @@ impl ServerState {
             message
         );
 
-        tracing::info!("[message_id: {message_id}] staring message broadcast, kind: {kind}");
-
         let bytes = message_to_bytes(kind, message)?;
 
         let guard = Guard::new();
@@ -209,8 +207,6 @@ impl ServerState {
                     self.add_client_to_disconnect_queue(client.session_id, DisconnectReason::ClientMSPCFull);
                 });
         }
-
-        tracing::info!("[message_id: {message_id}] ending message broadcast, kind: {kind}");
 
         Ok(())
     }
