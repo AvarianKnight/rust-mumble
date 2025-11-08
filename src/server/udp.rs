@@ -68,7 +68,7 @@ async fn handle_packet(
         // timestamp
         send.write_u64::<byteorder::LittleEndian>(timestamp)?;
         // user count
-        send.write_u32::<byteorder::BigEndian>(state.clients.len() as u32)?;
+        send.write_u32::<byteorder::BigEndian>(state.active_clients.load(std::sync::atomic::Ordering::Relaxed))?;
         // max user count
         send.write_u32::<byteorder::BigEndian>(MAX_CLIENTS as u32)?;
         // max bandwidth per user

@@ -1,4 +1,5 @@
 use std::net::IpAddr;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
@@ -52,7 +53,7 @@ pub async fn create_tcp_server(
 
         let restrict_to_version = state.restrict_to_version.clone();
 
-        let cur_clients = state.clients.len();
+        let cur_clients = state.active_clients.load(Ordering::Relaxed) as usize;
         let addr = match tcp_stream.peer_addr() {
             Ok(a) => a,
             Err(e) => {
@@ -160,7 +161,7 @@ async fn handle_new_client(
     // we shouldn't really hit a case where this gets hit.
     let (tx, rx) = mpsc::channel(4096);
 
-    let client = state.add_client(version, authenticate, crypt_state, write, tx, peer_ip);
+    let client = state.add_client(version, authenticate, crypt_state, write, tx, peer_ip).await;
 
     tracing::info!("TCP new client {} connected {}", username, peer_ip);
 

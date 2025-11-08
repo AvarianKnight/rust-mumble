@@ -1,9 +1,10 @@
 use scc::HashMap;
-use scc::ebr::Guard;
+use tracing::Instrument;
 
 use crate::client::{ClientArc, WeakClient};
 use crate::error::DisconnectReason;
 use crate::message::ClientMessage;
+use crate::server::constants::ConcurrentHashMap;
 use crate::state::ServerStateRef;
 use crate::voice::{ClientBound, VoicePacket};
 use std::sync::Arc;
@@ -11,6 +12,7 @@ use std::sync::atomic::Ordering;
 
 use super::{Handler, MumbleResult};
 
+// shield your eyes
 impl Handler for VoicePacket<ClientBound> {
     async fn handle(&self, state: &ServerStateRef, client: &ClientArc) -> MumbleResult {
         let mute = client.is_muted();
@@ -22,19 +24,23 @@ impl Handler for VoicePacket<ClientBound> {
         if let VoicePacket::<ClientBound>::Audio { target, session_id, .. } = self {
             // copy the data into an arc so we can reuse the packet for each client
 
-            let listening_clients: HashMap<u32, WeakClient> = HashMap::new();
+            // TODO: maybe make this static
+            let listening_clients: ConcurrentHashMap<u32, WeakClient> = ConcurrentHashMap::new();
 
             match *target {
                 // Channel
                 0 => {
                     let channel_id = client.channel_id.load(Ordering::Relaxed);
 
-                    let guard = Guard::new();
-                    if let Some(channel) = state.channels.peek(&channel_id, &guard) {
-                        let guard = Guard::new();
-
-                        for (session_id, client) in channel.clients.iter(&guard) {
-                            let _ = listening_clients.insert(*session_id, Arc::downgrade(client));
+                    if let Some(c) = state.get_channel_by_channel_id(channel_id).await
+                        && let Some(channel) = c.upgrade()
+                    {
+                        let mut iter = channel.clients.first_entry_async().await;
+                        while let Some(entry) = iter {
+                            let session_id = entry.key();
+                            let client = entry.get();
+                            let _ = listening_clients.insert_async(*session_id, Arc::downgrade(client)).await;
+                            iter = entry.next_async().await;
                         }
                     }
                 }
@@ -44,34 +50,42 @@ impl Handler for VoicePacket<ClientBound> {
 
                     if let Some(target) = target {
                         {
-                            let guard = Guard::new();
-                            for (session, _) in target.sessions.iter(&guard) {
-                                let client_guard = Guard::new();
-                                if let Some(client) = state.clients.peek(session, &client_guard) {
-                                    let _ = listening_clients.insert(*session, Arc::downgrade(client));
+                            let mut iter = target.sessions.first_entry_async().await;
+                            while let Some(entry) = iter {
+                                let session = entry.key();
+                                if let Some(client) = state.clients.get_async(session).await {
+                                    let _ = listening_clients.insert_async(*session, Arc::downgrade(client.get())).await;
                                 }
+                                iter = entry.next_async().await;
                             }
                         }
 
                         {
-                            let guard = Guard::new();
-                            for (channel_id, _) in target.channels.iter(&guard) {
-                                let guard = Guard::new();
-                                if let Some(target_channel) = state.channels.peek(channel_id, &guard) {
+                            let mut iter = target.channels.first_entry_async().await;
+                            while let Some(entry) = iter {
+                                let channel_id = entry.key();
+                                if let Some(target_channel) = state.channels.get_async(channel_id).await {
                                     {
-                                        let guard = Guard::new();
-                                        for (session_id, client) in target_channel.listeners.iter(&guard) {
-                                            let _ = listening_clients.insert(*session_id, Arc::downgrade(client));
+                                        let mut listener_iter = target_channel.get().listeners.first_entry_async().await;
+                                        while let Some(listener_entry) = listener_iter {
+                                            let session_id = listener_entry.key();
+                                            let client = listener_entry.get();
+                                            let _ = listening_clients.insert_async(*session_id, Arc::downgrade(client)).await;
+                                            listener_iter = listener_entry.next_async().await;
                                         }
                                     }
 
                                     {
-                                        let guard = Guard::new();
-                                        for (session_id, client) in target_channel.clients.iter(&guard) {
-                                            let _ = listening_clients.insert(*session_id, Arc::downgrade(client));
+                                        let mut client_iter = target_channel.get().clients.first_entry_async().await;
+                                        while let Some(client_entry) = client_iter {
+                                            let session_id = client_entry.key();
+                                            let client = client_entry.get();
+                                            let _ = listening_clients.insert_async(*session_id, Arc::downgrade(client)).await;
+                                            client_iter = client_entry.next_async().await;
                                         }
                                     }
                                 }
+                                iter = entry.next_async().await;
                             }
                         }
                     }
@@ -90,19 +104,18 @@ impl Handler for VoicePacket<ClientBound> {
             // remove the calling client from the session list so we don't have to branch here.
             listening_clients.remove_async(session_id).await;
 
-            listening_clients
-                .scan_async(|_k, cl| {
-                    if let Some(cl) = cl.upgrade() {
-                        if cl.is_deaf() {
-                            return;
-                        }
-
+            let mut iter = listening_clients.first_entry_async().await;
+            while let Some(entry) = iter {
+                let cl = entry.get();
+                if let Some(cl) = cl.upgrade() {
+                    if !cl.is_deaf() {
                         let _ = cl.publisher.try_send(ClientMessage::SendVoicePacket(self.clone())).map_err(|_e| {
                             state.add_client_to_disconnect_queue(cl.session_id, DisconnectReason::ClientMSPCFull);
                         });
                     }
-                })
-                .await;
+                }
+                iter = entry.next_async().await;
+            }
         }
 
         Ok(())
