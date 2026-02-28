@@ -24,4 +24,4 @@ EXPOSE 8080/tcp
 
 ENV RUST_LOG=info
 
-CMD ["/rust-mumble"] # Password should be passed via args
+ENTRYPOINT ["/rust-mumble"]
