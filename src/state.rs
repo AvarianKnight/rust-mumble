@@ -395,19 +395,26 @@ impl ServerState {
         client.send_crypt_setup(true).await
     }
 
-    async fn cleanup_client_by_session(&self, client_session: u32) {
-        self.clients.remove_async(&client_session).await;
-        self.clients_without_udp.remove_async(&client_session).await;
-    }
-
     pub async fn disconnect(&self, client_session: u32, disconnect_reason: DisconnectReason) {
         let mut channel_id = None;
 
-        if let Some(c) = self.get_client_by_session_id(client_session).await
-            && let Some(client) = c.upgrade()
+        // Grab the client before trying to call any of the disconnect code, and make sure
+        // that the call to `self.client` returns `true` (the client still exists)
+        // before we call any of the `active_clients` code to prevent underflowing the u32
+        //
+        // This fixes [GH-12](https://github.com/AvarianKnight/rust-mumble/issues/12)
+        //
+        // Which causes the `active_clients` to get double decremented and overflow,
+        // if we manage to hit the disconnect perfectly so that two threads race
+        // the deletion, which can happen with auto-cleanup, since this will call
+        // `cancel_token`, which also causes the main client loop to call `disconnect`
+        let client = self.get_client_by_session_id(client_session).await.and_then(|c| c.upgrade());
+
+        if self.clients.remove_async(&client_session).await
+            && let Some(client) = client
         {
             channel_id = Some(client.channel_id.load(Ordering::Relaxed));
-            self.cleanup_client_by_session(client_session).await;
+            self.clients_without_udp.remove_async(&client_session).await;
 
             crate::metrics::CLIENTS_TOTAL.dec();
             self.active_clients.fetch_sub(1, Ordering::Relaxed);
@@ -423,7 +430,8 @@ impl ServerState {
             //
             // This is required due to the fact that `HashIndex` doesn't guarantee a stable
             // garbage collection, so we can have a client exist for a long time afterwards
-            // which will cause their socket to not close until we eventually hit GC
+            // which will cause their socket to not close until we eventually hit GC, which would
+            // increase memory usage, and also cause us to hit our socket limit.
             let client_shutdown = Arc::clone(&client);
             tokio::task::spawn(async move {
                 let mut client_writer = client_shutdown.write.lock().await;
