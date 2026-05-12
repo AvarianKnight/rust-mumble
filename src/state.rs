@@ -61,6 +61,7 @@ impl CodecState {
 pub type ServerStateRef = Arc<ServerState>;
 
 pub struct ServerState {
+    pub remove_positional_data: bool,
     pub clients: ConcurrentHashMap<u32, ClientArc>,
     pub clients_without_udp: ConcurrentHashMap<u32, WeakClient>,
     pub clients_by_socket: ConcurrentHashMap<SocketAddr, WeakClient>,
@@ -79,11 +80,12 @@ pub struct ServerState {
 }
 
 impl ServerState {
-    pub fn new(socket: Arc<UdpSocket>, restrict_to_version: Option<String>) -> Self {
+    pub fn new(socket: Arc<UdpSocket>, remove_positional_data: bool, restrict_to_version: Option<String>) -> Self {
         let channels = ConcurrentHashMap::new();
         let _ = channels.insert(0, Channel::new(0, Some(0), "Root".to_string(), "Root channel".to_string(), false));
 
         Self {
+            remove_positional_data,
             // we preallocate the maximum amount of clients to prevent the possibility of resizes
             // later, which will prevent double-sends in certain situations
             clients: ConcurrentHashMap::with_capacity(MAX_CLIENTS),

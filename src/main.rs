@@ -68,6 +68,10 @@ struct Args {
     /// Password for the http server api basic authentification
     #[clap(long, value_parser, default_value = None)]
     http_password: Option<String>,
+    /// When sending voice packets back to the client this will strip the clients
+    /// mumble position and other information from the packet.
+    #[clap(long)]
+    strip_mumble_position: bool,
     /// Use TLS for the http server (https), will use the same certificate as the mumble server
     #[clap(long)]
     https: bool,
@@ -125,7 +129,11 @@ async fn main() {
 
     let udp_socket = Arc::new(socket);
 
-    let state = Arc::new(ServerState::new(udp_socket.clone(), args.restrict_to_version));
+    let state = Arc::new(ServerState::new(
+        udp_socket.clone(),
+        args.strip_mumble_position,
+        args.restrict_to_version,
+    ));
     let udp_state = state.clone();
 
     tracing::info!("tcp/udp server start listening on {}", args.listen);

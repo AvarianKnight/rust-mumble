@@ -105,7 +105,7 @@ impl VoicePacketDst for ClientBound {
 }
 
 impl VoicePacket<ServerBound> {
-    pub fn into_client_bound(self, session_id: u32) -> VoicePacket<ClientBound> {
+    pub fn into_client_bound(self, session_id: u32, remove_positional_data: bool) -> VoicePacket<ClientBound> {
         match self {
             VoicePacket::Ping { timestamp } => VoicePacket::Ping { timestamp },
             VoicePacket::Audio {
@@ -120,7 +120,7 @@ impl VoicePacket<ServerBound> {
                 session_id,
                 seq_num,
                 payload,
-                position_info,
+                position_info: if remove_positional_data { None } else { position_info },
             },
         }
     }
