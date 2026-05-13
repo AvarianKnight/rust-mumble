@@ -27,7 +27,7 @@ impl Handler for Ping {
         stats.tcp_ping_var.store(self.get_tcp_ping_var(), Ordering::Relaxed);
 
         {
-            let mut crypt_state_read = client.crypt_state.lock().await;
+            let mut crypt_state_read = client.crypt_state.lock();
 
             crypt_state_read.remote_good = self.get_good();
             crypt_state_read.remote_late = self.get_late();

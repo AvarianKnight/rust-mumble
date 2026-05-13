@@ -104,7 +104,7 @@ async fn handle_packet(
             // Send decrypt packet
 
             let (decrypt_result, last_good) = {
-                let mut crypt_state = client.crypt_state.lock().await;
+                let mut crypt_state = client.crypt_state.lock();
                 (crypt_state.decrypt(&mut buffer), crypt_state.last_good)
             };
 
@@ -123,7 +123,7 @@ async fn handle_packet(
 
                     let restart_crypt = match err {
                         DecryptError::Late => {
-                            let late = { client.crypt_state.lock().await.late };
+                            let late = { client.crypt_state.lock().late };
 
                             late > 100
                         }
@@ -186,7 +186,7 @@ async fn handle_packet(
             let mut dest = BytesMut::new();
 
             {
-                let mut crypt = client.crypt_state.lock().await;
+                let mut crypt = client.crypt_state.lock();
                 crypt.encrypt(&client_packet, &mut dest);
             }
 

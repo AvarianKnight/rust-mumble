@@ -71,7 +71,7 @@ async fn clean_run(state: &ServerState) -> Result<(), MumbleError> {
                 continue;
             }
 
-            let last_good = { client.crypt_state.lock().await.last_good };
+            let last_good = { client.crypt_state.lock().last_good };
 
             if now.duration_since(last_good).as_millis() > 8000 {
                 clients_to_reset_crypt.push(Arc::clone(client))

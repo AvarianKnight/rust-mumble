@@ -54,7 +54,7 @@ pub struct Client {
     pub deaf: AtomicBool,
     pub write: Mutex<Option<WriteHalf<TlsStream<TcpStream>>>>,
     // pub tokens: Vec<String>,
-    pub crypt_state: Mutex<CryptState>,
+    pub crypt_state: parking_lot::Mutex<CryptState>,
     pub udp_socket_addr: ArcSwapOption<SocketAddr>,
     // Token used to cancel any tasks related to this client, i.e. tcp/udp loops
     pub cancel_token: CancellationToken,
@@ -127,7 +127,7 @@ impl Client {
             net_stats: Default::default(),
             name: Arc::new(authenticate.get_username().to_string()),
             channel_id: AtomicU32::new(channel_id),
-            crypt_state: Mutex::new(crypt_state),
+            crypt_state: parking_lot::Mutex::new(crypt_state),
             write: Mutex::new(Some(write)),
             // tokens,
             deaf: AtomicBool::new(false),
@@ -250,7 +250,7 @@ impl Client {
     // the server nonce for unless the clients request a resync
     pub async fn send_crypt_setup(&self, reset: bool) -> Result<(), MumbleError> {
         let crypt_setup = {
-            let mut crypt = self.crypt_state.lock().await;
+            let mut crypt = self.crypt_state.lock();
             if reset {
                 crypt.reset();
             }
@@ -329,7 +329,7 @@ impl Client {
             let mut dest = BytesMut::new();
 
             {
-                self.crypt_state.lock().await.encrypt(&packet, &mut dest);
+                self.crypt_state.lock().encrypt(&packet, &mut dest);
             }
 
             let buf = &dest.freeze()[..];

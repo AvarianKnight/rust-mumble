@@ -349,7 +349,7 @@ impl ServerState {
             if let Some(c) = c.upgrade() {
                 let mut try_buf = bytes.clone();
                 let decrypt_result = {
-                    let mut crypt_state = c.crypt_state.lock().await;
+                    let mut crypt_state = c.crypt_state.lock();
                     crypt_state.decrypt(&mut try_buf)
                 };
 

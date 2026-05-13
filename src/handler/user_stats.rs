@@ -30,7 +30,7 @@ impl Handler for UserStats {
         }
 
         if include_crypt_stats {
-            let crypt_info = client.crypt_state.lock().await;
+            let crypt_info = client.crypt_state.lock();
             let crypto_stats = msg.mut_from_client();
             crypto_stats.set_good(crypt_info.remote_good);
             crypto_stats.set_late(crypt_info.remote_late);
