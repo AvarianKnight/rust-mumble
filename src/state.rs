@@ -215,22 +215,17 @@ impl ServerState {
 
     async fn handle_client_left_channel(&self, client_session: u32, leave_channel_id: u32) -> Option<u32> {
         {
-            let mut iter = self.channels.first_entry_async().await;
+            let channel = self.channels.get_async(&leave_channel_id).await;
+            if let Some(chan) = channel {
+                let c = chan.get();
 
-            while let Some(channel) = iter {
-                let c = channel.get();
+                // remove the client from the channel
+                c.clients.remove_async(&client_session).await;
 
-                if c.id == leave_channel_id {
-                    // remove the client from the channel
-                    c.clients.remove_async(&client_session).await;
-
-                    // if the channel isn't temporary then we want to keep it
-                    if !c.temporary || !c.get_clients().is_empty() {
-                        return None;
-                    };
-                }
-
-                iter = channel.next_async().await;
+                // if the channel isn't temporary then we want to keep it
+                if !c.temporary || !c.get_clients().is_empty() {
+                    return None;
+                };
             }
         }
 
