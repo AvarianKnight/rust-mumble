@@ -29,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 pub type ClientArc = Arc<Client>;
 pub type WeakClient = Weak<Client>;
 
-type VoiceTargetArray = [Arc<VoiceTarget>; 29];
+type VoiceTargetArray = [Arc<VoiceTarget>; 30];
 
 #[derive(Debug, Default)]
 pub struct NetStats {
