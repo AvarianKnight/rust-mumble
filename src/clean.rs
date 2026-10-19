@@ -1,5 +1,4 @@
 use crate::error::{DisconnectReason, MumbleError};
-use crate::metrics::CRYPT_RESETS;
 use crate::server::constants::ConcurrentHashMap;
 use crate::state::{ServerState, ServerStateRef};
 use std::sync::Arc;
@@ -52,7 +51,6 @@ async fn clean_run(state: &ServerState) -> Result<(), MumbleError> {
             let since_last_udp = now.duration_since(client.last_udp_ping.load());
 
             if since_last_udp.as_secs() > 30 {
-                CRYPT_RESETS.inc();
                 // resetting this will cause the client to be removed from the "good socket" list
                 clients_to_reset_crypt.push(Arc::clone(client));
                 iter = client_iter.next_async().await;
@@ -83,10 +81,10 @@ async fn clean_run(state: &ServerState) -> Result<(), MumbleError> {
 
     for client in clients_to_reset_crypt {
         let session_id = client.session_id;
-        if let Err(e) = state.reset_client_crypt(&client).await {
-            tracing::error!("failed to send crypt setup for {}: {:?}", e, session_id);
-        } else {
-            tracing::info!("Requesting {} crypt be reset", client);
+        match state.reset_client_crypt(&client).await {
+            Ok(true) => tracing::info!("Requesting {} crypt be reset", client),
+            Ok(false) => (),
+            Err(e) => tracing::error!("failed to send crypt setup for {}: {:?}", session_id, e),
         }
     }
 

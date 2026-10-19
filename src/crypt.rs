@@ -6,7 +6,7 @@ use aes::cipher::generic_array::GenericArray;
 use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
 use bytes::BytesMut;
 use ring::rand::{SecureRandom, SystemRandom};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 lazy_static! {
     static ref SYSTEM_RANDOM: SystemRandom = SystemRandom::new();
@@ -14,6 +14,11 @@ lazy_static! {
 
 const KEY_SIZE: usize = 16;
 const BLOCK_SIZE: usize = std::mem::size_of::<u128>();
+
+/// The minimum amount of time between crypt resets, this doubles every time a reset doesn't result
+/// in a good packet up to `MAX_RESET_COOLDOWN`
+const BASE_RESET_COOLDOWN: Duration = Duration::from_secs(5);
+const MAX_RESET_COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
 pub struct CryptState {
@@ -29,6 +34,9 @@ pub struct CryptState {
     pub lost: u32,
     pub resync: u32,
     pub last_good: Instant,
+    last_reset: Option<Instant>,
+    // the amount of resets we've done without getting a good packet in between
+    failed_resets: u32,
 
     // Remote -> client
     pub remote_late: u32,
@@ -54,6 +62,8 @@ impl Default for CryptState {
             lost: 0,
             resync: 0,
             last_good: Instant::now(),
+            last_reset: None,
+            failed_resets: 0,
 
             remote_late: 0,
             remote_good: 0,
@@ -73,6 +83,30 @@ impl CryptState {
         self.lost = 0;
         self.resync = 0;
         self.last_good = Instant::now();
+    }
+
+    /// Checks if we're allowed to reset the crypt state yet, and if we are marks the reset as
+    /// started so concurrent callers won't also reset it.
+    ///
+    /// This prevents us from constantly sending crypt resets to clients that can't use UDP, or
+    /// are currently in a bad network state.
+    pub fn try_start_reset(&mut self) -> bool {
+        let now = Instant::now();
+
+        if let Some(last_reset) = self.last_reset {
+            let cooldown = BASE_RESET_COOLDOWN
+                .saturating_mul(1 << self.failed_resets.min(4))
+                .min(MAX_RESET_COOLDOWN);
+
+            if now.duration_since(last_reset) < cooldown {
+                return false;
+            }
+        }
+
+        self.last_reset = Some(now);
+        self.failed_resets = self.failed_resets.saturating_add(1);
+
+        true
     }
 
     /// Returns the nonce used for encrypting.
@@ -168,6 +202,7 @@ impl CryptState {
         self.decrypt_history[nonce_0 as usize] = (self.decrypt_nonce >> 8) as u8;
         self.good += 1;
         self.last_good = Instant::now();
+        self.failed_resets = 0;
 
         if late {
             self.late += 1;

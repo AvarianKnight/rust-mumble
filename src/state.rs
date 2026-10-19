@@ -399,7 +399,15 @@ impl ServerState {
     ///
     /// Resets the clients crypt state and removes their udp socket so we no longer take invalid
     /// data from the UDP stream
-    pub async fn reset_client_crypt(&self, client: &ClientArc) -> Result<(), MumbleError> {
+    ///
+    /// Returns `false` if the reset was skipped because the client was reset too recently
+    pub async fn reset_client_crypt(&self, client: &ClientArc) -> Result<bool, MumbleError> {
+        if !client.crypt_state.lock().try_start_reset() {
+            return Ok(false);
+        }
+
+        crate::metrics::CRYPT_RESETS.inc();
+
         let _ = self
             .clients_without_udp
             .insert_async(client.session_id, Arc::downgrade(client))
@@ -413,7 +421,9 @@ impl ServerState {
             self.remove_client_by_socket(&address).await;
         }
 
-        client.send_crypt_setup(true).await
+        client.send_crypt_setup(true).await?;
+
+        Ok(true)
     }
 
     pub async fn disconnect(&self, client_session: u32, disconnect_reason: DisconnectReason) {
