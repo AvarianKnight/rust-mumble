@@ -4,7 +4,9 @@ use crate::crypt::CryptState;
 use crate::error::{DisconnectReason, MumbleError};
 use crate::message::ClientMessage;
 use crate::metrics::DISCONNECT;
-use crate::proto::mumble::{Authenticate, ChannelRemove, ChannelState, CodecVersion, UserRemove, Version};
+use crate::proto::mumble::{
+    Authenticate, ChannelRemove, ChannelState, CodecVersion, PermissionDenied, PermissionDenied_DenyType, UserRemove, Version,
+};
 use crate::proto::{MessageKind, message_to_bytes};
 use crate::server::constants::{ConcurrentHashMap, MAX_CLIENTS};
 use crate::voice::{ServerBound, VoicePacket};
@@ -62,6 +64,8 @@ pub type ServerStateRef = Arc<ServerState>;
 
 pub struct ServerState {
     pub remove_positional_data: bool,
+    /// Only allow a single client to be inside of a temporary channel at a time
+    pub single_user_temporary_channels: bool,
     pub clients: ConcurrentHashMap<u32, ClientArc>,
     pub clients_without_udp: ConcurrentHashMap<u32, WeakClient>,
     pub clients_by_socket: ConcurrentHashMap<SocketAddr, WeakClient>,
@@ -79,12 +83,16 @@ pub struct ServerState {
 }
 
 impl ServerState {
-    pub fn new(remove_positional_data: bool, restrict_to_version: Option<String>) -> Self {
+    pub fn new(remove_positional_data: bool, restrict_to_version: Option<String>, single_user_temporary_channels: bool) -> Self {
         let channels = ConcurrentHashMap::new();
-        let _ = channels.insert(0, Channel::new(0, Some(0), "Root".to_string(), "Root channel".to_string(), false));
+        let _ = channels.insert(
+            0,
+            Channel::new(0, Some(0), "Root".to_string(), "Root channel".to_string(), false, None),
+        );
 
         Self {
             remove_positional_data,
+            single_user_temporary_channels,
             // we preallocate the maximum amount of clients to prevent the possibility of resizes
             // later, which will prevent double-sends in certain situations
             clients: ConcurrentHashMap::with_capacity(MAX_CLIENTS),
@@ -132,12 +140,14 @@ impl ServerState {
 
     pub async fn add_channel(&self, state: &ChannelState) -> ChannelRef {
         let channel_id = self.get_free_channel_id();
+        let max_users = (self.single_user_temporary_channels && state.get_temporary()).then_some(1);
         let channel = Channel::new(
             channel_id,
             Some(state.get_parent()),
             state.get_name().to_string(),
             state.get_description().to_string(),
             state.get_temporary(),
+            max_users,
         );
 
         tracing::debug!("Created channel {} with name {}", channel_id, state.get_name().to_string());
@@ -211,6 +221,7 @@ impl ServerState {
 
                 // remove the client from the channel
                 c.clients.remove_async(&client_session).await;
+                c.release(client_session);
 
                 // if the channel isn't temporary then we want to keep it
                 if !c.temporary || !c.get_clients().is_empty() {
@@ -236,6 +247,28 @@ impl ServerState {
     }
 
     pub async fn set_client_channel(&self, client: &ClientArc, channel_id: u32) -> Result<(), MumbleError> {
+        if self.single_user_temporary_channels {
+            let channel = self.channels.get_async(&channel_id).await.map(|c| Arc::clone(c.get()));
+
+            if let Some(channel) = channel
+                && channel.temporary
+                && !channel.try_claim(client.session_id)
+            {
+                tracing::debug!(
+                    "Client: {} tried to join temporary channel {} but it already has a client in it",
+                    client.session_id,
+                    channel_id
+                );
+
+                let mut denied = PermissionDenied::new();
+                denied.set_field_type(PermissionDenied_DenyType::ChannelFull);
+                denied.set_channel_id(channel_id);
+                denied.set_session(client.session_id);
+
+                return client.send_message(MessageKind::PermissionDenied, &denied).await;
+            }
+        }
+
         let leave_channel_id = client.join_channel(channel_id);
 
         tracing::info!(

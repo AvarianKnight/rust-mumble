@@ -51,6 +51,8 @@ Options:
           Path to the certificate file for the TLS certificate [default: cert.pem]
   -r, --restrict-to-version <RESTRICT_TO_VERSION>
           Restricts the clients release name to a specific version, useful for providing a stop-gap if you want to stop external clients from joining, setting to `CitizenFX` will only allow clients with the CitizenFX mumble client to join
+      --single-user-temporary-channels
+          Only allow a single client to be inside of a temporary channel at a time, any other client trying to join an occupied temporary channel will be denied
   -V, --version
           Print version
 ```

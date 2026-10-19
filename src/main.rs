@@ -90,6 +90,10 @@ struct Args {
     /// clients with the CitizenFX mumble client to join.
     #[clap(short, long, value_parser, default_value = None)]
     restrict_to_version: Option<String>,
+    /// Only allow a single client to be inside of a temporary channel at a time, any other client
+    /// trying to join an occupied temporary channel will be denied.
+    #[clap(long)]
+    single_user_temporary_channels: bool,
 }
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -124,7 +128,11 @@ async fn main() {
 
     let mut set = JoinSet::new();
 
-    let state = Arc::new(ServerState::new(args.strip_mumble_position, args.restrict_to_version));
+    let state = Arc::new(ServerState::new(
+        args.strip_mumble_position,
+        args.restrict_to_version,
+        args.single_user_temporary_channels,
+    ));
     let udp_state = state.clone();
 
     tracing::info!("tcp/udp server start listening on {}", args.listen_address);
