@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use scc::ebr::Guard;
+use scc::Guard;
 
 use crate::client::ClientArc;
 use crate::handler::Handler;
@@ -13,28 +13,28 @@ impl Handler for UserState {
     async fn handle(&self, state: &ServerStateRef, client: &ClientArc) -> MumbleResult {
         let session_id = { client.session_id };
 
-        if self.get_session() != session_id {
+        if self.session() != session_id {
             return Ok(());
         }
 
         client.update(self);
 
         if self.has_channel_id() {
-            state.set_client_channel(client, self.get_channel_id()).await?;
+            state.set_client_channel(client, self.channel_id()).await?;
         }
 
-        for channel_id in self.get_listening_channel_add() {
+        for channel_id in &self.listening_channel_add {
             let guard = Guard::new();
             if let Some(channel) = state.channels.peek(channel_id, &guard) {
                 // if this errors it means our client is already in it, we can just ignore.
-                let _ = channel.listeners.insert(session_id, Arc::clone(client));
+                let _ = channel.listeners.insert_sync(session_id, Arc::clone(client));
             }
         }
 
-        for channel_id in self.get_listening_channel_remove() {
+        for channel_id in &self.listening_channel_remove {
             let guard = Guard::new();
             if let Some(channel) = state.channels.peek(channel_id, &guard) {
-                channel.listeners.remove(&session_id);
+                channel.listeners.remove_sync(&session_id);
             }
         }
 

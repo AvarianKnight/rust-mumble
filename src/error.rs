@@ -10,11 +10,13 @@ pub enum MumbleError {
     #[error("tokio io error: {0}")]
     Io(#[from] tokio::io::Error),
     #[error("protobuf error: {0}")]
-    Parse(#[from] protobuf::ProtobufError),
+    Parse(#[from] protobuf::Error),
     #[error("voice decrypt error: {0}")]
     Decrypt(#[from] DecryptError),
     #[error("send message error: {0}")]
     SendError(#[from] tokio::sync::mpsc::error::SendTimeoutError<ClientMessage>),
+    #[error("message size {0} exceeds the maximum allowed size")]
+    MessageTooLarge(u32),
     #[error("invalid voice target id")]
     InvalidVoiceTarget,
     #[error("channel doesn't exist")]

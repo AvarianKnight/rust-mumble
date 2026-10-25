@@ -5,7 +5,7 @@ use crate::error::{DisconnectReason, MumbleError};
 use crate::message::ClientMessage;
 use crate::metrics::DISCONNECT;
 use crate::proto::mumble::{
-    Authenticate, ChannelRemove, ChannelState, CodecVersion, PermissionDenied, PermissionDenied_DenyType, UserRemove, Version,
+    Authenticate, ChannelRemove, ChannelState, CodecVersion, PermissionDenied, permission_denied, UserRemove, Version,
 };
 use crate::proto::{MessageKind, message_to_bytes};
 use crate::server::constants::{ConcurrentHashMap, MAX_CLIENTS};
@@ -13,7 +13,7 @@ use crate::voice::{ServerBound, VoicePacket};
 use bytes::BytesMut;
 use protobuf::Message;
 // use scc::HashCache;
-use scc::ebr::Guard;
+use scc::Guard;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -85,7 +85,7 @@ pub struct ServerState {
 impl ServerState {
     pub fn new(remove_positional_data: bool, restrict_to_version: Option<String>, single_user_temporary_channels: bool) -> Self {
         let channels = ConcurrentHashMap::new();
-        let _ = channels.insert(
+        let _ = channels.insert_sync(
             0,
             Channel::new(0, Some(0), "Root".to_string(), "Root channel".to_string(), false, None),
         );
@@ -140,17 +140,17 @@ impl ServerState {
 
     pub async fn add_channel(&self, state: &ChannelState) -> ChannelRef {
         let channel_id = self.get_free_channel_id();
-        let max_users = (self.single_user_temporary_channels && state.get_temporary()).then_some(1);
+        let max_users = (self.single_user_temporary_channels && state.temporary()).then_some(1);
         let channel = Channel::new(
             channel_id,
-            Some(state.get_parent()),
-            state.get_name().to_string(),
-            state.get_description().to_string(),
-            state.get_temporary(),
+            Some(state.parent()),
+            state.name().to_string(),
+            state.description().to_string(),
+            state.temporary(),
             max_users,
         );
 
-        tracing::debug!("Created channel {} with name {}", channel_id, state.get_name().to_string());
+        tracing::debug!("Created channel {} with name {}", channel_id, state.name().to_string());
 
         // this should already be checked prior to us creating the channel
         let _ = self.channels.insert_async(channel_id, Arc::clone(&channel)).await;
@@ -161,7 +161,7 @@ impl ServerState {
     pub async fn get_client_by_name(&self, name: &str) -> Option<ClientArc> {
         let client = self
             .clients
-            .any_entry_async(|_k, client| client.authenticate.get_username() == name)
+            .any_async(|_k, client| username_matches(client.authenticate.username(), name))
             .await;
 
         if let Some(cl) = client {
@@ -183,10 +183,10 @@ impl ServerState {
 
     pub fn add_client_to_disconnect_queue(&self, session_id: u32, disconnect_reason: DisconnectReason) {
         // if we fail to add the session to the queue we don't care.
-        let _ = self.disconnect_queue.insert(session_id, disconnect_reason);
+        let _ = self.disconnect_queue.insert_sync(session_id, disconnect_reason);
     }
 
-    pub fn broadcast_message<T: Message>(&self, kind: MessageKind, message: &T) -> Result<(), MumbleError> {
+    pub fn broadcast_message<T: Message + std::fmt::Debug>(&self, kind: MessageKind, message: &T) -> Result<(), MumbleError> {
         let message_id = self.debug_message_id.fetch_add(1, Ordering::Relaxed);
         tracing::trace!(
             "[message_id: {message_id}] broadcast message: {:?}, {:?}",
@@ -261,7 +261,7 @@ impl ServerState {
                 );
 
                 let mut denied = PermissionDenied::new();
-                denied.set_field_type(PermissionDenied_DenyType::ChannelFull);
+                denied.set_type(permission_denied::DenyType::ChannelFull);
                 denied.set_channel_id(channel_id);
                 denied.set_session(client.session_id);
 
@@ -282,7 +282,7 @@ impl ServerState {
             {
                 let mut was_set = false;
 
-                let mut iter = self.channels.first_entry_async().await;
+                let mut iter = self.channels.begin_async().await;
                 while let Some(channel) = iter {
                     let c = channel.get();
 
@@ -323,14 +323,14 @@ impl ServerState {
 
     pub async fn get_channel_by_channel_id(&self, channel_id: u32) -> Option<WeakChannelRef> {
         self.channels
-            .any_entry_async(|_k, channel| channel.id == channel_id)
+            .any_async(|_k, channel| channel.id == channel_id)
             .await
             .map_or(None, |channel| Some(Arc::downgrade(channel.get())))
     }
 
     pub async fn get_channel_by_name(&self, name: &str) -> Option<WeakChannelRef> {
         self.channels
-            .any_entry_async(|_k, channel| channel.name == name)
+            .any_async(|_k, channel| channel.name == name)
             .await
             .map_or(None, |channel| Some(Arc::downgrade(channel.get())))
     }
@@ -361,7 +361,7 @@ impl ServerState {
     ) -> Result<Option<(ClientArc, VoicePacket<ServerBound>)>, MumbleError> {
         let mut client_and_packet = None;
 
-        let mut iter = self.clients_without_udp.first_entry_async().await;
+        let mut iter = self.clients_without_udp.begin_async().await;
 
         while let Some(client) = iter {
             let c = client.get();
@@ -526,5 +526,30 @@ impl ServerState {
         }
 
         channel_id
+    }
+}
+
+/// `name` is either the full mumble username or a FiveM server id, FiveM clients connect as "[<server id>] <player name>"
+fn username_matches(username: &str, name: &str) -> bool {
+    username == name
+        || (!name.is_empty()
+            && name.bytes().all(|b| b.is_ascii_digit())
+            && username.strip_prefix('[').and_then(|rest| rest.strip_prefix(name)).is_some_and(|rest| rest.starts_with("] ")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::username_matches;
+
+    #[test]
+    fn username_matches_full_name_or_fivem_server_id() {
+        assert!(username_matches("[12] Bob", "[12] Bob"));
+        assert!(username_matches("[12] Bob", "12"));
+        assert!(username_matches("[12] ", "12"));
+        assert!(!username_matches("[123] Bob", "12"));
+        assert!(!username_matches("[12] Bob", "1"));
+        assert!(!username_matches("[12] Bob", ""));
+        assert!(!username_matches("12", "12x"));
+        assert!(!username_matches("Bob [12] ", "12"));
     }
 }

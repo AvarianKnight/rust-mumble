@@ -11,13 +11,13 @@ use super::MumbleResult;
 impl Handler for UserStats {
     async fn handle(&self, _state: &ServerStateRef, client: &ClientArc) -> MumbleResult {
         // we don't have ACL so we'll just always return true here for right now.
-        let include_extended_info = self.get_session() == client.session_id || true;
+        let include_extended_info = self.session() == client.session_id || true;
 
         // we don't support certs
         let mut include_cert_info = false;
         let include_crypt_stats = include_extended_info;
 
-        if self.get_stats_only() {
+        if self.stats_only() {
             include_cert_info = false;
         }
 
@@ -31,13 +31,13 @@ impl Handler for UserStats {
 
         if include_crypt_stats {
             let crypt_info = client.crypt_state.lock();
-            let crypto_stats = msg.mut_from_client();
+            let crypto_stats = msg.from_client.mut_or_insert_default();
             crypto_stats.set_good(crypt_info.remote_good);
             crypto_stats.set_late(crypt_info.remote_late);
             crypto_stats.set_lost(crypt_info.remote_lost);
             crypto_stats.set_resync(crypt_info.remote_resync);
 
-            let crypto_stats = msg.mut_from_server();
+            let crypto_stats = msg.from_server.mut_or_insert_default();
 
             crypto_stats.set_good(crypt_info.remote_good);
             crypto_stats.set_late(crypt_info.remote_late);

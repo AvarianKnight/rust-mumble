@@ -1,5 +1,6 @@
 use crate::error::MumbleError;
 use crate::handler::Handler;
+use crate::server::constants::MAX_MESSAGE_SIZE;
 use bytes::{BufMut, Bytes, BytesMut};
 use protobuf::Message;
 use std::fmt;
@@ -121,7 +122,7 @@ pub fn message_to_bytes<T: Message>(kind: MessageKind, message: &T) -> Result<By
     Ok(get_mumble_buffer(kind, &bytes))
 }
 
-pub async fn send_message<T: Message, S: AsyncWrite + Unpin>(kind: MessageKind, message: &T, stream: &mut S) -> Result<(), MumbleError> {
+pub async fn send_message<T: Message + std::fmt::Debug, S: AsyncWrite + Unpin>(kind: MessageKind, message: &T, stream: &mut S) -> Result<(), MumbleError> {
     tracing::trace!("send message: {:?}, {:?}", std::any::type_name::<T>(), message);
 
     let bytes = message_to_bytes(kind, message)?;
@@ -139,14 +140,12 @@ pub async fn send_message<T: Message, S: AsyncWrite + Unpin>(kind: MessageKind, 
     Ok(())
 }
 
-pub async fn expected_message<T: Message + Handler, S: AsyncRead + Unpin>(kind: MessageKind, stream: &mut S) -> Result<T, MumbleError> {
+pub async fn expected_message<T: Message + std::fmt::Debug + Handler, S: AsyncRead + Unpin>(kind: MessageKind, stream: &mut S) -> Result<T, MumbleError> {
     let mut message_kind = stream.read_u16().await?;
     let mut retry = 0;
 
     while message_kind != kind as u16 && retry < 10 {
-        let size = stream.read_u32().await?;
-        let mut data = vec![0; size as usize];
-        stream.read_exact(&mut data).await?;
+        read_payload(stream).await?;
 
         retry += 1;
 
@@ -160,14 +159,42 @@ pub async fn expected_message<T: Message + Handler, S: AsyncRead + Unpin>(kind: 
     get_message(stream).await
 }
 
-pub async fn get_message<T: Message + Handler, S: AsyncRead + Unpin>(stream: &mut S) -> Result<T, MumbleError> {
+/// Reads a length prefixed message body, rejecting sizes above `MAX_MESSAGE_SIZE` before allocating
+pub async fn read_payload<S: AsyncRead + Unpin>(stream: &mut S) -> Result<BytesMut, MumbleError> {
     let size = stream.read_u32().await?;
-    let mut data = vec![0; size as usize];
+    if size > MAX_MESSAGE_SIZE {
+        return Err(MumbleError::MessageTooLarge(size));
+    }
+
+    let mut data = BytesMut::zeroed(size as usize);
     stream.read_exact(&mut data).await?;
 
-    let message = T::parse_from_bytes(data.as_slice())?;
+    Ok(data)
+}
+
+pub async fn get_message<T: Message + std::fmt::Debug + Handler, S: AsyncRead + Unpin>(stream: &mut S) -> Result<T, MumbleError> {
+    let data = read_payload(stream).await?;
+
+    let message = T::parse_from_bytes(&data)?;
 
     tracing::trace!("received message: {:?}, {:?}", std::any::type_name::<T>(), message);
 
     Ok(message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn read_payload_rejects_oversized_length() {
+        let mut stream: &[u8] = &u32::MAX.to_be_bytes();
+        assert!(matches!(read_payload(&mut stream).await, Err(MumbleError::MessageTooLarge(u32::MAX))));
+    }
+
+    #[tokio::test]
+    async fn read_payload_reads_body() {
+        let mut stream: &[u8] = &[0, 0, 0, 2, 7, 9];
+        assert_eq!(read_payload(&mut stream).await.unwrap().as_ref(), &[7, 9]);
+    }
 }

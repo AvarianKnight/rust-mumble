@@ -24,17 +24,17 @@ async fn clean_run(state: &ServerState) -> Result<(), MumbleError> {
     let mut clients_to_reset_crypt = Vec::new();
 
     {
-        let mut iter = state.disconnect_queue.first_entry();
+        let mut iter = state.disconnect_queue.begin_sync();
         while let Some(client_data) = iter {
-            let _ = clients_to_remove.insert(*client_data.key(), *client_data.get());
-            iter = client_data.next();
+            let _ = clients_to_remove.insert_sync(*client_data.key(), *client_data.get());
+            iter = client_data.next_sync();
         }
 
-        state.disconnect_queue.clear();
+        state.disconnect_queue.clear_sync();
     }
 
     {
-        let mut iter = state.clients.first_entry_async().await;
+        let mut iter = state.clients.begin_async().await;
         while let Some(client_iter) = iter {
             let client = client_iter.get();
             // if we lost our publisher then we should just remove the client, we won't be able to handle anything in this state.
@@ -88,7 +88,7 @@ async fn clean_run(state: &ServerState) -> Result<(), MumbleError> {
         }
     }
 
-    let mut iter = clients_to_remove.first_entry_async().await;
+    let mut iter = clients_to_remove.begin_async().await;
     while let Some(v) = iter {
         state.disconnect(*v.key(), *v.get()).await;
 

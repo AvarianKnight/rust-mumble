@@ -12,7 +12,7 @@ use atomic_float::AtomicF32;
 use bytes::{Bytes, BytesMut};
 use crossbeam::atomic::AtomicCell;
 use protobuf::Message;
-use scc::ebr::Guard;
+use scc::Guard;
 use std::fmt::Display;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -123,9 +123,9 @@ impl Client {
         Arc::new(Self {
             // version,
             session_id,
-            log_name: Arc::new(format!("{} [session id: {}]", authenticate.get_username(), session_id)),
+            log_name: Arc::new(format!("{} [session id: {}]", authenticate.username(), session_id)),
             net_stats: Default::default(),
-            name: Arc::new(authenticate.get_username().to_string()),
+            name: Arc::new(authenticate.username().to_string()),
             channel_id: AtomicU32::new(channel_id),
             crypt_state: parking_lot::Mutex::new(crypt_state),
             write: Mutex::new(Some(write)),
@@ -198,7 +198,7 @@ impl Client {
         self.deaf.store(deaf, Ordering::Release);
     }
 
-    pub async fn send_message<T: Message>(&self, kind: MessageKind, message: &T) -> Result<(), MumbleError> {
+    pub async fn send_message<T: Message + std::fmt::Debug>(&self, kind: MessageKind, message: &T) -> Result<(), MumbleError> {
         tracing::trace!(
             "[{}] [{}] send message: {:?}, {:?}",
             self.name,
@@ -363,11 +363,11 @@ impl Client {
 
     pub fn update(&self, state: &UserState) {
         if state.has_mute() {
-            self.set_mute(state.get_mute());
+            self.set_mute(state.mute());
         }
 
         if state.has_deaf() {
-            self.set_deaf(state.get_deaf());
+            self.set_deaf(state.deaf());
         }
     }
 

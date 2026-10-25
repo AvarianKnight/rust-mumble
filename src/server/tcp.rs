@@ -83,7 +83,7 @@ pub async fn create_tcp_server(
 
             // immediately cleanup connections, should be default for SO_LINGER
             tcp_stream
-                .set_linger(Some(Duration::from_secs(0)))
+                .set_zero_linger()
                 .context("set linger to 0")
                 .unwrap();
 
@@ -138,8 +138,8 @@ async fn handle_new_client(
     state: ServerStateRef,
 ) -> Result<(), anyhow::Error> {
     let (version, authenticate, crypt_state) = Client::init(&mut tls_stream, server_version).await.context("init client")?;
-    let version_release = version.get_release();
-    let username = authenticate.get_username().to_string();
+    let version_release = version.release();
+    let username = authenticate.username().to_string();
 
     static USERNAME_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[\d+\].*$").unwrap());
 

@@ -25,45 +25,57 @@ pub trait BufMutExt: BufMut {
 
 impl<T: io::Read> ReadExt for T {
     fn read_varint(&mut self) -> io::Result<u64> {
-        let b0 = self.read_u8()?;
-        if b0 & 0b1111_1100 == 0b1111_1000 {
-            return Ok(!self.read_varint()?);
+        let mut b0 = self.read_u8()?;
+        let negative = b0 & 0b1111_1100 == 0b1111_1000;
+        if negative {
+            // only one level of negation is valid (the writer never nests it), looping or
+            // recursing on attacker supplied prefixes is what used to overflow the stack
+            b0 = self.read_u8()?;
+            if b0 & 0b1111_1100 == 0b1111_1000 {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "nested negative varint"));
+            }
         }
-        if b0 & 0b1111_1100 == 0b1111_1100 {
-            return Ok(!u64::from(b0 & 0x03));
-        }
-        if (b0 & 0b1000_0000) == 0 {
-            return Ok(u64::from(b0 & 0b0111_1111));
-        }
-        let b1 = self.read_u8()?;
-        if (b0 & 0b0100_0000) == 0 {
-            return Ok(u64::from(b0 & 0b0011_1111) << 8 | u64::from(b1));
-        }
-        let b2 = self.read_u8()?;
-        if (b0 & 0b0010_0000) == 0 {
-            return Ok(u64::from(b0 & 0b0001_1111) << 16 | u64::from(b1) << 8 | u64::from(b2));
-        }
-        let b3 = self.read_u8()?;
-        if (b0 & 0b0001_0000) == 0 {
-            return Ok(u64::from(b0 & 0x0F) << 24 | u64::from(b1) << 16 | u64::from(b2) << 8 | u64::from(b3));
-        }
-        let b4 = self.read_u8()?;
-        if (b0 & 0b0000_0100) == 0 {
-            return Ok(u64::from(b1) << 24 | u64::from(b2) << 16 | u64::from(b3) << 8 | u64::from(b4));
-        }
-        let b5 = self.read_u8()?;
-        let b6 = self.read_u8()?;
-        let b7 = self.read_u8()?;
-        let b8 = self.read_u8()?;
-        Ok(u64::from(b1) << 56
-            | u64::from(b2) << 48
-            | u64::from(b3) << 40
-            | u64::from(b4) << 32
-            | u64::from(b5) << 24
-            | u64::from(b6) << 16
-            | u64::from(b7) << 8
-            | u64::from(b8))
+
+        let value = read_unsigned_varint(self, b0)?;
+        Ok(if negative { !value } else { value })
     }
+}
+
+fn read_unsigned_varint<R: io::Read + ?Sized>(reader: &mut R, b0: u8) -> io::Result<u64> {
+    if b0 & 0b1111_1100 == 0b1111_1100 {
+        return Ok(!u64::from(b0 & 0x03));
+    }
+    if (b0 & 0b1000_0000) == 0 {
+        return Ok(u64::from(b0 & 0b0111_1111));
+    }
+    let b1 = reader.read_u8()?;
+    if (b0 & 0b0100_0000) == 0 {
+        return Ok(u64::from(b0 & 0b0011_1111) << 8 | u64::from(b1));
+    }
+    let b2 = reader.read_u8()?;
+    if (b0 & 0b0010_0000) == 0 {
+        return Ok(u64::from(b0 & 0b0001_1111) << 16 | u64::from(b1) << 8 | u64::from(b2));
+    }
+    let b3 = reader.read_u8()?;
+    if (b0 & 0b0001_0000) == 0 {
+        return Ok(u64::from(b0 & 0x0F) << 24 | u64::from(b1) << 16 | u64::from(b2) << 8 | u64::from(b3));
+    }
+    let b4 = reader.read_u8()?;
+    if (b0 & 0b0000_0100) == 0 {
+        return Ok(u64::from(b1) << 24 | u64::from(b2) << 16 | u64::from(b3) << 8 | u64::from(b4));
+    }
+    let b5 = reader.read_u8()?;
+    let b6 = reader.read_u8()?;
+    let b7 = reader.read_u8()?;
+    let b8 = reader.read_u8()?;
+    Ok(u64::from(b1) << 56
+        | u64::from(b2) << 48
+        | u64::from(b3) << 40
+        | u64::from(b4) << 32
+        | u64::from(b5) << 24
+        | u64::from(b6) << 16
+        | u64::from(b7) << 8
+        | u64::from(b8))
 }
 
 impl<T: io::Write> WriteExt for T {
@@ -121,5 +133,26 @@ impl<T: io::Write> WriteExt for T {
 impl<T: BufMut> BufMutExt for T {
     fn put_varint(&mut self, val: u64) {
         self.writer().write_varint(val).expect("BufMut::writer never errors");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn varint_round_trips() {
+        for value in [0, 1, 0x7f, 0x80, 0x3fff, 0x4000, 0x1f_ffff, 0x0fff_ffff, 0xffff_ffff, u64::MAX, u64::MAX - 3, 1 << 63] {
+            let mut buf = Vec::new();
+            buf.write_varint(value).unwrap();
+            assert_eq!(buf.as_slice().read_varint().unwrap(), value, "value {value:#x}");
+        }
+    }
+
+    #[test]
+    fn nested_negative_varint_is_rejected() {
+        let buf = vec![0xF8u8; 1024 * 1024];
+        let err = buf.as_slice().read_varint().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 }

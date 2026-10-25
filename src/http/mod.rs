@@ -42,10 +42,10 @@ pub fn create_http_server(state: ServerStateRef, username: String, password: Opt
     Some(
         Router::new()
             .route("/deaf", post(post_deaf))
-            .route("/deaf/:player_id", get(get_deaf))
+            .route("/deaf/{player_id}", get(get_deaf))
             .route("/metrics", get(get_metrics))
             .route("/mute", post(post_mute))
-            .route("/mute/:player_id", get(get_mute))
+            .route("/mute/{player_id}", get(get_mute))
             .route("/status", get(get_status))
             .route_layer(from_fn_with_state(app_state.clone(), auth_basic))
             .with_state(app_state),

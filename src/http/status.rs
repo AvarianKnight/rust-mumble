@@ -1,6 +1,6 @@
 use axum::Json;
 use axum::extract::State;
-use scc::ebr::Guard;
+use scc::Guard;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
@@ -33,7 +33,7 @@ pub struct MumbleTarget {
 // #[actix_web::get("/status")]
 pub async fn get_status(State(state): State<AppStateRef>) -> Json<HashMap<u32, MumbleClient>> {
     let mut clients = HashMap::new();
-    let mut iter = state.server.clients.first_entry_async().await;
+    let mut iter = state.server.clients.begin_async().await;
     while let Some(client_entry) = iter {
         let client = client_entry.get();
         let session = client.session_id;

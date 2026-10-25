@@ -32,7 +32,7 @@ const PERM_ADMIN: u32 = PERM_DEFAULT | PERM_MUTEDEAFEN | PERM_MOVE | PERM_KICK |
 impl Handler for PermissionQuery {
     async fn handle(&self, _state: &ServerStateRef, client: &ClientArc) -> MumbleResult {
         let mut pq = PermissionQuery::new();
-        pq.set_channel_id(self.get_channel_id());
+        pq.set_channel_id(self.channel_id());
         pq.set_permissions(PERM_ADMIN);
 
         {

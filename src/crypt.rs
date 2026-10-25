@@ -1,9 +1,8 @@
 use crate::error::DecryptError;
 use crate::proto::mumble::CryptSetup;
 use crate::voice::{VoicePacket, VoicePacketDst, decode_voice_packet, encode_voice_packet};
-use aes::Aes128;
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
+use aes::cipher::{BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
+use aes::{Aes128, Block};
 use bytes::BytesMut;
 use ring::rand::{SecureRandom, SystemRandom};
 use std::time::{Duration, Instant};
@@ -51,7 +50,7 @@ impl Default for CryptState {
         SYSTEM_RANDOM.fill(&mut key).expect("Failed to generate random key");
 
         Self {
-            aes: Aes128::new(GenericArray::from_slice(&key)),
+            aes: Aes128::new(&key.into()),
             key,
             encrypt_nonce: 0,
             decrypt_nonce: 1 << 127,
@@ -119,8 +118,8 @@ impl CryptState {
         self.decrypt_nonce.to_le_bytes()
     }
 
-    pub fn set_decrypt_nonce(&mut self, nonce: &[u8]) {
-        self.decrypt_nonce = u128::from_le_bytes(nonce.try_into().unwrap());
+    pub fn set_decrypt_nonce(&mut self, nonce: &[u8; BLOCK_SIZE]) {
+        self.decrypt_nonce = u128::from_le_bytes(*nonce);
         self.resync += 1;
     }
 
@@ -286,20 +285,18 @@ impl CryptState {
 
     /// AES-128 encryption primitive.
     fn aes_encrypt(&self, data: u128) -> u128 {
-        let mut data_bytes = data.to_be_bytes();
-        let block = GenericArray::from_mut_slice(&mut data_bytes);
-        self.aes.encrypt_block(block);
+        let mut block = Block::from(data.to_be_bytes());
+        self.aes.encrypt_block(&mut block);
 
-        u128::from_be_bytes(data_bytes)
+        u128::from_be_bytes(block.into())
     }
 
     /// AES-128 decryption primitive.
     fn aes_decrypt(&self, data: u128) -> u128 {
-        let mut data_bytes = data.to_be_bytes();
-        let block = GenericArray::from_mut_slice(&mut data_bytes);
-        self.aes.decrypt_block(block);
+        let mut block = Block::from(data.to_be_bytes());
+        self.aes.decrypt_block(&mut block);
 
-        u128::from_be_bytes(data_bytes)
+        u128::from_be_bytes(block.into())
     }
 }
 
@@ -308,4 +305,43 @@ fn s2(block: u128) -> u128 {
     let rot = block.rotate_left(1);
     let carry = rot & 1;
     rot ^ (carry * 0x86)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // vectors from draft-krovetz-ocb-00, same as mumble's TestCrypt::testvectors (FiveM's client uses this OCB2 too)
+    fn test_state() -> CryptState {
+        let raw: [u8; BLOCK_SIZE] = std::array::from_fn(|i| i as u8);
+        let mut cs = CryptState::default();
+        cs.key = raw;
+        cs.aes = Aes128::new(&raw.into());
+        cs.encrypt_nonce = u128::from_le_bytes(raw);
+        cs.decrypt_nonce = u128::from_le_bytes(raw);
+        cs
+    }
+
+    #[test]
+    fn ocb2_test_vectors() {
+        let cs = test_state();
+
+        let blank_tag = cs.ocb_encrypt(&mut []);
+        assert_eq!(blank_tag.to_be_bytes(), [0xBF, 0x31, 0x08, 0x13, 0x07, 0x73, 0xAD, 0x5E, 0xC7, 0x0E, 0xC6, 0x9E, 0x78, 0x75, 0xA7, 0xB0]);
+
+        let source: [u8; 40] = std::array::from_fn(|i| i as u8);
+        let mut buf = source;
+        let tag = cs.ocb_encrypt(&mut buf);
+        assert_eq!(tag.to_be_bytes(), [0x9D, 0xB0, 0xCD, 0xF8, 0x80, 0xF7, 0x3E, 0x3E, 0x10, 0xD4, 0xEB, 0x32, 0x17, 0x76, 0x66, 0x88]);
+        assert_eq!(
+            buf,
+            [
+                0xF7, 0x5D, 0x6B, 0xC8, 0xB4, 0xDC, 0x8D, 0x66, 0xB8, 0x36, 0xA2, 0xB0, 0x8B, 0x32, 0xA6, 0x36, 0x9F, 0x1C, 0xD3, 0xC5,
+                0x22, 0x8D, 0x79, 0xFD, 0x6C, 0x26, 0x7F, 0x5F, 0x6A, 0xA7, 0xB2, 0x31, 0xC7, 0xDF, 0xB9, 0xD5, 0x99, 0x51, 0xAE, 0x9C,
+            ]
+        );
+
+        assert_eq!(cs.ocb_decrypt(&mut buf), tag);
+        assert_eq!(buf, source);
+    }
 }

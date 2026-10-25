@@ -20,10 +20,10 @@ use crate::error::MumbleError;
 use crate::message::ClientMessage;
 use crate::proto::MessageKind;
 use crate::proto::mumble;
+use crate::proto::read_payload;
 use crate::state::ServerStateRef;
 use crate::voice::{ServerBound, decode_voice_packet};
 use anyhow::Context;
-use bytes::BytesMut;
 use protobuf::Message;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::mpsc::Receiver;
@@ -38,7 +38,7 @@ pub trait Handler {
 pub struct MessageHandler;
 
 impl MessageHandler {
-    async fn try_handle<T: Message + Handler>(buf: &[u8], state: &ServerStateRef, client: &ClientArc) -> Result<(), MumbleError> {
+    async fn try_handle<T: Message + std::fmt::Debug + Handler>(buf: &[u8], state: &ServerStateRef, client: &ClientArc) -> Result<(), MumbleError> {
         let message = T::parse_from_bytes(buf)?;
 
         tracing::trace!("[{}] handle message: {:?}, {:?}", client, std::any::type_name::<T>(), message);
@@ -54,13 +54,7 @@ impl MessageHandler {
         client: &ClientArc,
     ) -> MumbleResult {
         let kind = kind?;
-        let size = stream.read_u32().await?;
-        // We'll just log this for now
-        // if size > 1024 {
-        //     return Err(anyhow!("Packet was size was {size}, max allowed is 1024"));
-        // }
-        let mut buf = BytesMut::zeroed(size as usize);
-        stream.read_exact(&mut buf).await?;
+        let mut buf = read_payload(stream).await?;
 
         let message_kind = MessageKind::try_from(kind)?;
 

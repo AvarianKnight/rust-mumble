@@ -1,0 +1,17 @@
+# Runs the test suite in Linux (same target as production builds)
+#   docker compose -f compose.test.yml run --rm test
+services:
+  test:
+    image: rust:1.99
+    working_dir: /src
+    volumes:
+      - .:/src
+      # keep downloaded crates and build output in volumes so reruns are fast and
+      # Linux artifacts don't land in the host's target/
+      - cargo-registry:/usr/local/cargo/registry
+      - target:/src/target
+    command: cargo test
+
+volumes:
+  cargo-registry:
+  target:

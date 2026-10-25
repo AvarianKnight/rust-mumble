@@ -32,7 +32,7 @@ impl Handler for VoicePacket<ClientBound> {
                     if let Some(c) = state.get_channel_by_channel_id(channel_id).await
                         && let Some(channel) = c.upgrade()
                     {
-                        let mut iter = channel.clients.first_entry_async().await;
+                        let mut iter = channel.clients.begin_async().await;
                         while let Some(entry) = iter {
                             let session_id = entry.key();
                             let client = entry.get();
@@ -47,7 +47,7 @@ impl Handler for VoicePacket<ClientBound> {
 
                     if let Some(target) = target {
                         {
-                            let mut iter = target.sessions.first_entry_async().await;
+                            let mut iter = target.sessions.begin_async().await;
                             while let Some(entry) = iter {
                                 let session = entry.key();
                                 if let Some(client) = state.clients.get_async(session).await {
@@ -58,12 +58,12 @@ impl Handler for VoicePacket<ClientBound> {
                         }
 
                         {
-                            let mut iter = target.channels.first_entry_async().await;
+                            let mut iter = target.channels.begin_async().await;
                             while let Some(entry) = iter {
                                 let channel_id = entry.key();
                                 if let Some(target_channel) = state.channels.get_async(channel_id).await {
                                     {
-                                        let mut listener_iter = target_channel.get().listeners.first_entry_async().await;
+                                        let mut listener_iter = target_channel.get().listeners.begin_async().await;
                                         while let Some(listener_entry) = listener_iter {
                                             let session_id = listener_entry.key();
                                             let client = listener_entry.get();
@@ -73,7 +73,7 @@ impl Handler for VoicePacket<ClientBound> {
                                     }
 
                                     {
-                                        let mut client_iter = target_channel.get().clients.first_entry_async().await;
+                                        let mut client_iter = target_channel.get().clients.begin_async().await;
                                         while let Some(client_entry) = client_iter {
                                             let session_id = client_entry.key();
                                             let client = client_entry.get();
@@ -101,7 +101,7 @@ impl Handler for VoicePacket<ClientBound> {
             // remove the calling client from the session list so we don't have to branch here.
             listening_clients.remove_async(session_id).await;
 
-            let mut iter = listening_clients.first_entry_async().await;
+            let mut iter = listening_clients.begin_async().await;
             while let Some(entry) = iter {
                 let cl = entry.get();
                 if let Some(cl) = cl.upgrade() {
