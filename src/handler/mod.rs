@@ -16,8 +16,9 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crate::client::ClientArc;
-use crate::error::MumbleError;
+use crate::error::{DisconnectReason, MumbleError};
 use crate::message::ClientMessage;
+use crate::proto::MAX_TCP_SIZE;
 use crate::proto::MessageKind;
 use crate::proto::mumble;
 use crate::state::ServerStateRef;
@@ -55,23 +56,19 @@ impl MessageHandler {
     ) -> MumbleResult {
         let kind = kind?;
         let size = stream.read_u32().await?;
-        // We'll just log this for now
-        // if size > 1024 {
-        //     return Err(anyhow!("Packet was size was {size}, max allowed is 1024"));
-        // }
+        if size > MAX_TCP_SIZE {
+            tracing::warn!(
+                "{} sent a TCP message of {} bytes (max {}), disconnecting",
+                client,
+                size,
+                MAX_TCP_SIZE
+            );
+            return Err(MumbleError::TcpPacketTooLarge.into());
+        }
         let mut buf = BytesMut::zeroed(size as usize);
         stream.read_exact(&mut buf).await?;
 
         let message_kind = MessageKind::try_from(kind)?;
-
-        // if size > 1024 {
-        //     tracing::warn!(
-        //         "{} is reading a packet that is very large, got size {}, max expected 1024! MessageKind: {message_kind} {:?}",
-        //         client,
-        //         size,
-        //         buf
-        //     );
-        // }
 
         crate::metrics::MESSAGES_TOTAL
             .with_label_values(&["tcp", "input", message_kind.to_string().as_str()])
@@ -150,7 +147,15 @@ impl MessageHandler {
                         let handle_read = Self::handle_stream_read::<S>(kind, &mut stream, state, client).await;
                         match handle_read {
                             Ok(()) => (),
-                            Err(_e) => {
+                            Err(e) => {
+                                // if we ever get a too large error we should instantly
+                                // drop the client as we can safely assume they're a bad
+                                // actor
+                                if matches!(e.downcast_ref::<MumbleError>(), Some(MumbleError::TcpPacketTooLarge)) {
+                                    state.disconnect(client.session_id, DisconnectReason::TcpPacketTooLarge).await;
+                                    return Err(e);
+                                }
+
                                 // prevent the client from starving the thread  if it has gotten into a bad state
                                 let bad_count = client.bad_net_count.fetch_add(1, Ordering::Relaxed);
                                 if bad_count > 20 {

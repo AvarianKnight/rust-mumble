@@ -5,6 +5,8 @@ use crate::message::ClientMessage;
 
 #[derive(Error, Debug)]
 pub enum MumbleError {
+    #[error("tcp message exceeded the maximum size")]
+    TcpPacketTooLarge,
     #[error("unexpected message kind: {0}")]
     UnexpectedMessageKind(u16),
     #[error("tokio io error: {0}")]
@@ -56,4 +58,6 @@ pub enum DisconnectReason {
     LostReceivingChannel,
     #[error("Client Message Channel Full")]
     ClientMSPCFull,
+    #[error("Client sent a TCP message larger than the maximum size")]
+    TcpPacketTooLarge,
 }

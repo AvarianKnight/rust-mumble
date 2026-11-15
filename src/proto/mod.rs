@@ -5,6 +5,8 @@ use protobuf::Message;
 use std::fmt;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+pub const MAX_TCP_SIZE: u32 = 8192;
+
 pub mod mumble;
 
 #[derive(Debug, Clone, Copy)]
@@ -145,6 +147,9 @@ pub async fn expected_message<T: Message + Handler, S: AsyncRead + Unpin>(kind: 
 
     while message_kind != kind as u16 && retry < 10 {
         let size = stream.read_u32().await?;
+        if size > MAX_TCP_SIZE {
+            return Err(MumbleError::TcpPacketTooLarge);
+        }
         let mut data = vec![0; size as usize];
         stream.read_exact(&mut data).await?;
 
@@ -162,6 +167,9 @@ pub async fn expected_message<T: Message + Handler, S: AsyncRead + Unpin>(kind: 
 
 pub async fn get_message<T: Message + Handler, S: AsyncRead + Unpin>(stream: &mut S) -> Result<T, MumbleError> {
     let size = stream.read_u32().await?;
+    if size > MAX_TCP_SIZE {
+        return Err(MumbleError::TcpPacketTooLarge);
+    }
     let mut data = vec![0; size as usize];
     stream.read_exact(&mut data).await?;
 
