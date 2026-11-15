@@ -46,7 +46,7 @@ impl Handler for ChannelState {
             return Ok(());
         }
 
-        let existing_channel = state.get_channel_by_name(name).await;
+        let existing_channel = state.get_channel_by_name(name);
         if existing_channel.is_some() {
             return Ok(());
         }

@@ -12,8 +12,8 @@ use crate::server::constants::{ConcurrentHashMap, MAX_CLIENTS};
 use crate::voice::{ServerBound, VoicePacket};
 use bytes::BytesMut;
 use protobuf::Message;
+use scc::Guard;
 // use scc::HashCache;
-use scc::ebr::Guard;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -85,7 +85,7 @@ pub struct ServerState {
 impl ServerState {
     pub fn new(remove_positional_data: bool, restrict_to_version: Option<String>, single_user_temporary_channels: bool) -> Self {
         let channels = ConcurrentHashMap::new();
-        let _ = channels.insert(
+        let _ = channels.insert_sync(
             0,
             Channel::new(0, Some(0), "Root".to_string(), "Root channel".to_string(), false, None),
         );
@@ -158,17 +158,12 @@ impl ServerState {
         channel
     }
 
-    pub async fn get_client_by_name(&self, name: &str) -> Option<ClientArc> {
-        let client = self
-            .clients
-            .any_entry_async(|_k, client| client.authenticate.get_username() == name)
-            .await;
-
-        if let Some(cl) = client {
-            return Some(Arc::clone(cl.get()));
-        }
-
-        None
+    pub fn get_client_by_name(&self, name: &str) -> Option<ClientArc> {
+        let guard = Guard::new();
+        self.clients
+            .iter(&guard)
+            .find(|(_, client)| client.authenticate.get_username() == name)
+            .map(|(_, client)| Arc::clone(client))
     }
 
     pub async fn set_client_socket(&self, client: &ClientArc, udp_socket: Arc<UdpSocket>, addr: SocketAddr) {
@@ -183,7 +178,7 @@ impl ServerState {
 
     pub fn add_client_to_disconnect_queue(&self, session_id: u32, disconnect_reason: DisconnectReason) {
         // if we fail to add the session to the queue we don't care.
-        let _ = self.disconnect_queue.insert(session_id, disconnect_reason);
+        let _ = self.disconnect_queue.insert_sync(session_id, disconnect_reason);
     }
 
     pub fn broadcast_message<T: Message>(&self, kind: MessageKind, message: &T) -> Result<(), MumbleError> {
@@ -215,16 +210,14 @@ impl ServerState {
 
     async fn handle_client_left_channel(&self, client_session: u32, leave_channel_id: u32) -> Option<u32> {
         {
-            let channel = self.channels.get_async(&leave_channel_id).await;
+            let channel = self.channels.peek_with(&leave_channel_id, |_, v| Arc::clone(v));
             if let Some(chan) = channel {
-                let c = chan.get();
-
                 // remove the client from the channel
-                c.clients.remove_async(&client_session).await;
-                c.release(client_session);
+                chan.clients.remove_async(&client_session).await;
+                chan.release(client_session);
 
                 // if the channel isn't temporary then we want to keep it
-                if !c.temporary || !c.get_clients().is_empty() {
+                if !chan.temporary || !chan.get_clients().is_empty() {
                     return None;
                 };
             }
@@ -248,7 +241,7 @@ impl ServerState {
 
     pub async fn set_client_channel(&self, client: &ClientArc, channel_id: u32) -> Result<(), MumbleError> {
         if self.single_user_temporary_channels {
-            let channel = self.channels.get_async(&channel_id).await.map(|c| Arc::clone(c.get()));
+            let channel = self.channels.peek_with(&channel_id, |_, v| Arc::clone(v));
 
             if let Some(channel) = channel
                 && channel.temporary
@@ -269,39 +262,19 @@ impl ServerState {
             }
         }
 
-        let leave_channel_id = client.join_channel(channel_id);
+        let Some(channel) = self.get_channel_by_channel_id(channel_id) else {
+            return Err(MumbleError::ChannelDoesntExist);
+        };
 
+        let _ = channel.clients.insert_async(client.session_id, Arc::clone(client)).await;
+
+        let leave_channel_id = client.join_channel(channel_id);
         tracing::info!(
             "Client: {} joined channel {} and left channel {:?}",
             client.session_id,
             channel_id,
             leave_channel_id
         );
-
-        {
-            {
-                let mut was_set = false;
-
-                let mut iter = self.channels.first_entry_async().await;
-                while let Some(channel) = iter {
-                    let c = channel.get();
-
-                    if c.id == channel_id {
-                        // remove the client from the channel
-                        let _ = c.clients.insert_async(client.session_id, Arc::clone(client)).await;
-                        was_set = true;
-
-                        break;
-                    }
-
-                    iter = channel.next_async().await;
-                }
-
-                if !was_set {
-                    return Err(MumbleError::ChannelDoesntExist);
-                }
-            }
-        }
 
         // Broadcast new user state
         let user_state = client.get_user_state();
@@ -321,32 +294,24 @@ impl ServerState {
         Ok(())
     }
 
-    pub async fn get_channel_by_channel_id(&self, channel_id: u32) -> Option<WeakChannelRef> {
+    pub fn get_channel_by_channel_id(&self, channel_id: u32) -> Option<ChannelRef> {
+        self.channels.peek_with(&channel_id, |_, v| Arc::clone(v))
+    }
+
+    pub fn get_channel_by_name(&self, name: &str) -> Option<WeakChannelRef> {
+        let guard = Guard::new();
         self.channels
-            .any_entry_async(|_k, channel| channel.id == channel_id)
-            .await
-            .map_or(None, |channel| Some(Arc::downgrade(channel.get())))
+            .iter(&guard)
+            .find(|(_, channel)| channel.name == name)
+            .map(|(_, channel)| Arc::downgrade(channel))
     }
 
-    pub async fn get_channel_by_name(&self, name: &str) -> Option<WeakChannelRef> {
-        self.channels
-            .any_entry_async(|_k, channel| channel.name == name)
-            .await
-            .map_or(None, |channel| Some(Arc::downgrade(channel.get())))
+    pub fn get_client_by_session_id(&self, session_id: u32) -> Option<WeakClient> {
+        self.clients.peek_with(&session_id, |_, v| Arc::downgrade(v))
     }
 
-    pub async fn get_client_by_session_id(&self, session_id: u32) -> Option<WeakClient> {
-        self.clients
-            .get_async(&session_id)
-            .await
-            .map_or(None, |client| Some(Arc::downgrade(client.get())))
-    }
-
-    pub async fn get_client_by_socket(&self, socket_addr: &SocketAddr) -> Option<ClientArc> {
-        self.clients_by_socket
-            .get_async(socket_addr)
-            .await
-            .and_then(|client| client.get().upgrade())
+    pub fn get_client_by_socket(&self, socket_addr: &SocketAddr) -> Option<ClientArc> {
+        self.clients_by_socket.peek_with(socket_addr, |_, v| v.upgrade()).flatten()
     }
 
     pub async fn remove_client_by_socket(&self, socket_addr: &SocketAddr) -> bool {
@@ -359,35 +324,25 @@ impl ServerState {
         bytes: &mut BytesMut,
         addr: SocketAddr,
     ) -> Result<Option<(ClientArc, VoicePacket<ServerBound>)>, MumbleError> {
-        let mut client_and_packet = None;
-
-        let mut iter = self.clients_without_udp.first_entry_async().await;
-
-        while let Some(client) = iter {
-            let c = client.get();
-            if let Some(c) = c.upgrade() {
+        let client_and_packet = {
+            let guard = Guard::new();
+            self.clients_without_udp.iter(&guard).find_map(|(_, weak)| {
+                let c = weak.upgrade()?;
                 let mut try_buf = bytes.clone();
-                let decrypt_result = {
-                    let mut crypt_state = c.crypt_state.lock();
-                    crypt_state.decrypt(&mut try_buf)
-                };
+                let decrypt_result = c.crypt_state.lock().decrypt(&mut try_buf);
 
                 match decrypt_result {
-                    Ok(p) => {
-                        self.set_client_socket(&c, socket.clone(), addr).await;
-                        client_and_packet = Some((c, p));
-                        break;
-                    }
+                    Ok(p) => Some((c, p)),
                     Err(err) => {
                         tracing::debug!("failed to decrypt packet: {:?}, continue to next client", err);
+                        None
                     }
                 }
-            }
-
-            iter = client.next_async().await;
-        }
+            })
+        };
 
         if let Some((client, _)) = &client_and_packet {
+            self.set_client_socket(client, socket.clone(), addr).await;
             self.clients_without_udp.remove_async(&client.session_id).await;
         }
 
@@ -439,7 +394,7 @@ impl ServerState {
         // if we manage to hit the disconnect perfectly so that two threads race
         // the deletion, which can happen with auto-cleanup, since this will call
         // `cancel_token`, which also causes the main client loop to call `disconnect`
-        let client = self.get_client_by_session_id(client_session).await.and_then(|c| c.upgrade());
+        let client = self.get_client_by_session_id(client_session).and_then(|c| c.upgrade());
 
         if self.clients.remove_async(&client_session).await
             && let Some(client) = client
@@ -483,11 +438,9 @@ impl ServerState {
         }
 
         if let Some(channel_id) = channel_id {
-            let channel = self.get_channel_by_channel_id(channel_id).await;
-            if let Some(c) = channel
-                && let Some(channel) = c.upgrade()
-            {
-                channel.clients.retain_async(|session_id, _| *session_id != client_session).await;
+            let channel = self.get_channel_by_channel_id(channel_id);
+            if let Some(channel) = channel {
+                channel.clients.remove_async(&client_session).await;
             }
         }
     }

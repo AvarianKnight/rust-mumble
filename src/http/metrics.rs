@@ -1,7 +1,6 @@
 use axum::http::StatusCode;
 use prometheus::{Encoder, TextEncoder};
 
-// #[actix_web::get("/metrics")]
 pub async fn get_metrics() -> Result<Vec<u8>, StatusCode> {
     let encoder = TextEncoder::new();
     let mut buffer = vec![];

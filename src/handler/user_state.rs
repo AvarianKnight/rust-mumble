@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use scc::ebr::Guard;
-
 use crate::client::ClientArc;
 use crate::handler::Handler;
 use crate::proto::mumble::UserState;
@@ -24,17 +22,15 @@ impl Handler for UserState {
         }
 
         for channel_id in self.get_listening_channel_add() {
-            let guard = Guard::new();
-            if let Some(channel) = state.channels.peek(channel_id, &guard) {
-                // if this errors it means our client is already in it, we can just ignore.
-                let _ = channel.listeners.insert(session_id, Arc::clone(client));
+            if let Some(channel) = state.channels.peek_with(channel_id, |_, v| Arc::clone(v)) {
+                // if this errors we areadly listen to them, we use if let err here so that we still get .await warnings incase of future refactors
+                if let Err(_e) = channel.listeners.insert_async(session_id, Arc::clone(client)).await {}
             }
         }
 
         for channel_id in self.get_listening_channel_remove() {
-            let guard = Guard::new();
-            if let Some(channel) = state.channels.peek(channel_id, &guard) {
-                channel.listeners.remove(&session_id);
+            if let Some(channel) = state.channels.peek_with(channel_id, |_, v| Arc::clone(v)) {
+                channel.listeners.remove_async(&session_id).await;
             }
         }
 

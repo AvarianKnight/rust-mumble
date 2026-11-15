@@ -1,6 +1,6 @@
 use axum::Json;
 use axum::extract::State;
-use scc::ebr::Guard;
+use scc::Guard;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
@@ -30,68 +30,50 @@ pub struct MumbleTarget {
     pub channels: HashSet<u32>,
 }
 
-// #[actix_web::get("/status")]
 pub async fn get_status(State(state): State<AppStateRef>) -> Json<HashMap<u32, MumbleClient>> {
-    let mut clients = HashMap::new();
-    let mut iter = state.server.clients.first_entry_async().await;
-    while let Some(client_entry) = iter {
-        let client = client_entry.get();
-        let session = client.session_id;
-        let channel_id = { client.channel_id.load(Ordering::Relaxed) };
-        let mut channel_name = None;
+    Json(collect_status(&state))
+}
 
-        {
-            let guard = Guard::new();
-            if let Some(channel) = state.server.channels.peek(&channel_id, &guard) {
-                channel_name = Some(channel.name.clone())
-            }
-        }
+fn collect_status(state: &AppStateRef) -> HashMap<u32, MumbleClient> {
+    let guard = Guard::new();
+    let now = Instant::now();
 
-        {
+    state
+        .server
+        .clients
+        .iter(&guard)
+        .map(|(_, client)| {
+            let channel_id = client.channel_id.load(Ordering::Relaxed);
+            let channel = state.server.channels.peek_with(&channel_id, |_, c| c.name.clone());
+
             let (good, late, lost, resync, last_good) = {
                 let crypt = client.crypt_state.lock();
                 (crypt.good, crypt.late, crypt.lost, crypt.resync, crypt.last_good)
             };
 
-            let mut mumble_client = MumbleClient {
+            let targets = client
+                .targets
+                .iter()
+                .map(|target| MumbleTarget {
+                    sessions: target.sessions.iter(&guard).map(|(s, _)| *s).collect(),
+                    channels: target.channels.iter(&guard).map(|(c, _)| *c).collect(),
+                })
+                .collect();
+
+            let mumble_client = MumbleClient {
                 name: client.get_name().as_ref().clone(),
                 session_id: client.session_id,
-                channel: channel_name,
+                channel,
                 mute: client.is_muted(),
                 good,
                 late,
                 lost,
                 resync,
-                last_good_duration: Instant::now().duration_since(last_good).as_millis(),
-                targets: Vec::new(),
+                last_good_duration: now.duration_since(last_good).as_millis(),
+                targets,
             };
 
-            for target in &client.targets {
-                let mut sessions = HashSet::new();
-                let mut channels = HashSet::new();
-
-                {
-                    let guard = Guard::new();
-                    for (session, _) in target.sessions.iter(&guard) {
-                        sessions.insert(*session);
-                    }
-                }
-
-                {
-                    let guard = Guard::new();
-                    for (channel, _) in target.channels.iter(&guard) {
-                        channels.insert(*channel);
-                    }
-                }
-                let mumble_target = { MumbleTarget { sessions, channels } };
-
-                mumble_client.targets.push(mumble_target);
-            }
-
-            clients.insert(session, mumble_client);
-        }
-        iter = client_entry.next_async().await;
-    }
-
-    Json(clients)
+            (client.session_id, mumble_client)
+        })
+        .collect()
 }

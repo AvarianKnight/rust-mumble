@@ -13,9 +13,8 @@ pub struct Deaf {
     user: String,
 }
 
-// #[actix_web::post("/deaf")]
 pub async fn post_deaf(State(state): State<AppStateRef>, Json(deaf): Json<Deaf>) -> StatusCode {
-    let client = state.server.get_client_by_name(deaf.user.as_str()).await;
+    let client = state.server.get_client_by_name(deaf.user.as_str());
 
     match client {
         Some(client) => {
@@ -27,10 +26,8 @@ pub async fn post_deaf(State(state): State<AppStateRef>, Json(deaf): Json<Deaf>)
     }
 }
 
-// #[actix_web::get("/deaf/{user}")]
 pub async fn get_deaf(Path(username): Path<String>, State(state): State<AppStateRef>) -> Result<Json<Deaf>, StatusCode> {
-    println!("??");
-    if let Some(client) = state.server.get_client_by_name(username.as_str()).await {
+    if let Some(client) = state.server.get_client_by_name(username.as_str()) {
         let deaf = Deaf {
             deaf: client.is_deaf(),
             user: username,

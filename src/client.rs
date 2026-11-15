@@ -12,7 +12,7 @@ use atomic_float::AtomicF32;
 use bytes::{Bytes, BytesMut};
 use crossbeam::atomic::AtomicCell;
 use protobuf::Message;
-use scc::ebr::Guard;
+use scc::Guard;
 use std::fmt::Display;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};

@@ -9,7 +9,7 @@ use byteorder::{ReadBytesExt, WriteBytesExt};
 use bytes::BytesMut;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io::Cursor;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::UdpSocket;
@@ -138,7 +138,7 @@ async fn handle_packet(
     //     return Err(anyhow!("Not a valid peer"));
     // }
 
-    let client_opt = state.get_client_by_socket(&addr).await;
+    let client_opt = state.get_client_by_socket(&addr);
 
     let (client, packet) = match client_opt {
         Some(client) => {

@@ -32,8 +32,6 @@ pub enum MumbleError {
     UnknownError(#[from] anyhow::Error),
 }
 
-// impl actix_web::error::ResponseError for MumbleError {}
-
 #[derive(Error, Debug)]
 pub enum DecryptError {
     #[error("tokio io error: {0}")]

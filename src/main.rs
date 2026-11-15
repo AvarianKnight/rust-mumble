@@ -3,7 +3,6 @@
 
 use rustls::ServerConfig;
 
-use socket2::{Domain, Protocol, Socket, Type};
 #[cfg(not(target_os = "windows"))]
 use tikv_jemallocator::Jemalloc;
 
